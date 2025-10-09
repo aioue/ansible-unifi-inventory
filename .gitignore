@@ -1,0 +1,39 @@
+# Python bytecode
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.so
+
+# Cache directories
+.cache/
+*.cache
+
+# Sensitive configuration files
+inventory.yaml
+.env
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.tox/
+.coverage
+htmlcov/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+

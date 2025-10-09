@@ -1,0 +1,51 @@
+# UniFi Dynamic Inventory Configuration
+# This file uses the UniFi inventory plugin to dynamically discover hosts
+
+# Plugin directive tells Ansible to use the UniFi inventory plugin
+plugin: unifi
+
+# UniFi controller URL (required)
+# The base URL of your UniFi OS controller (e.g., UDM, UCG)
+url: "https://192.168.1.1"
+
+# Authentication: provide either token OR username+password
+# Token authentication is preferred for security
+
+# Username/password authentication (local admin without 2FA)
+# Generate via UniFi OS Settings > Admins & Users > Create New User -> Admin + Restrict to Local Access Only
+username: "admin"
+password: "your-password-here"
+
+# Local API token
+# After logging in as a _local_ admin user, go to Settings > Network > Control Plane > Integrations > Network API and create a new token
+# NOTE: Leave empty to use username/password instead
+token: ""
+
+# UniFi site name (default: "default")
+# Most single-controller setups use the default site
+site: "default"
+
+# SSL certificate verification (default: true)
+# Set to false for self-signed certificates
+# Security note: disabling verification reduces security
+verify_ssl: true
+
+# Include UniFi devices in inventory (default: false)
+# When true, adds access points, switches, and gateways to inventory
+include_devices: false
+
+# Client last_seen filter in minutes (default: 30)
+# Only include clients seen within this many minutes
+# Useful to exclude stale/disconnected devices
+last_seen_minutes: 30
+
+# Cache TTL in seconds (default: 30)
+# How long to cache inventory results
+# Reduces API calls for frequent inventory queries
+# Set to 0 to disable caching
+cache_ttl: 30
+
+# Cache file path (default: ./.cache/unifi_inventory.json)
+# Location to store cached inventory JSON
+cache_path: "./.cache/unifi_inventory.json"
+
