@@ -2,6 +2,35 @@
 
 Dynamic inventory plugin for Ansible that discovers hosts from a UniFi OS controller (UDM, UCG, etc.).
 
+```shell
+$ ansible-inventory -i inventory/unifi.yaml all --graph
+@all:
+  |--@ungrouped:
+  |--@unifi_clients:
+  |  |--phone
+  |  |--laptop
+  |  |--Kitchen Echo
+  |  |--pc
+  |  |--console
+  |  |--nas
+  |--@unifi_wireless_clients:
+  |  |--phone
+  |--@network_default:
+  |  |--laptop
+  |--@network_iot:
+  |  |--Kitchen Echo
+  |--@vlan_30:
+  |  |--Kithen Echo
+  |--@vlan_iot:
+  |  |--Kitchen Echo
+  |--@unifi_wired_clients:
+  |  |--pc
+  |  |--console
+  |  |--nas
+  |--@ssid_iot:
+  |  |--Kitchen Echo
+```
+
 ## What This Is
 
 - **Dynamic inventory plugin** for Ansible that fetches UniFi network clients as inventory hosts
@@ -43,6 +72,8 @@ ansible-inventory -i inventory/unifi.yaml --list
 - **Ansible 2.15+** installed
 - **UniFi OS controller** accessible via network (UDM, UCG, etc.)
 - **API credentials**: local admin username/password or API token
+
+Built on top of the excellent [aiounifi](https://github.com/Kane610/aiounifi) library.
 
 ## Installation
 
