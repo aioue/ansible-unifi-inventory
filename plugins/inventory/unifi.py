@@ -348,6 +348,11 @@ class InventoryModule(BaseInventoryPlugin, Cacheable):
                     else:
                         hostname = mac
 
+                # Replace spaces with underscores for Ansible compatibility
+                # Ansible's YAML parser and host pattern matching doesn't handle spaces
+                if hostname:
+                    hostname = hostname.replace(" ", "_")
+
                 # Get IP addresses (both IPv4 and IPv6)
                 ipv4 = getattr(client, "ip", None) or client.raw.get("ip")
 
@@ -476,6 +481,10 @@ class InventoryModule(BaseInventoryPlugin, Cacheable):
                         model = getattr(device, "model", "device")
                         hostname = f"{model}_{mac[-8:]}"
 
+                    # Replace spaces with underscores for Ansible compatibility
+                    if hostname:
+                        hostname = hostname.replace(" ", "_")
+
                     # Get management IP
                     ip = getattr(device, "ip", None)
                     if not ip:
@@ -536,4 +545,3 @@ class InventoryModule(BaseInventoryPlugin, Cacheable):
                 inventory[group] = {"hosts": []}
             if hostname not in inventory[group]["hosts"]:
                 inventory[group]["hosts"].append(hostname)
-
