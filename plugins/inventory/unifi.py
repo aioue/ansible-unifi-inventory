@@ -146,7 +146,7 @@ def sanitize_group_name(name: str) -> str:
 class InventoryModule(BaseInventoryPlugin, Cacheable):
     """UniFi dynamic inventory plugin"""
 
-    NAME = "unifi"
+    NAME = "aioue.unifi.unifi"
 
     def verify_file(self, path):
         """Verify that the inventory file is valid for this plugin"""
