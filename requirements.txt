@@ -1,5 +1,5 @@
 # UniFi Dynamic Inventory Plugin Dependencies
-aiounifi~=77
+aiounifi==77
 aiohttp>=3.9.0
 PyYAML>=6.0
 
