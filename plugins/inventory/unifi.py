@@ -16,7 +16,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 DOCUMENTATION = r"""
-    name: unifi
+    name: aioue.unifi.unifi
     plugin_type: inventory
     short_description: UniFi dynamic inventory plugin
     description:
@@ -28,7 +28,7 @@ DOCUMENTATION = r"""
         plugin:
             description: Name of the plugin
             required: true
-            choices: ['unifi']
+            choices: ['aioue.unifi.unifi']
         url:
             description: UniFi controller URL (e.g., https://192.168.1.1)
             required: true
@@ -90,7 +90,7 @@ DOCUMENTATION = r"""
 
 EXAMPLES = r"""
 # Example inventory file: inventory/unifi.yaml
-plugin: unifi
+plugin: aioue.unifi.unifi
 url: https://192.168.1.1
 username: admin
 password: secret
@@ -102,7 +102,7 @@ cache_ttl: 30
 cache_path: ./.cache/unifi_inventory.json
 
 # Example with token authentication
-plugin: unifi
+plugin: aioue.unifi.unifi
 url: https://192.168.1.1
 token: your-api-token-here
 verify_ssl: false
