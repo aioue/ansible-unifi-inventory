@@ -158,7 +158,7 @@ class InventoryModule(BaseInventoryPlugin, Cacheable):
             try:
                 with open(path, "r") as f:
                     content = f.read()
-                    if "plugin: unifi" in content or "plugin: 'unifi'" in content:
+                    if "plugin: aioue.unifi.unifi" in content or "plugin: 'aioue.unifiunifi'" in content:
                         return True
             except Exception:
                 pass
