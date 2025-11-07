@@ -68,7 +68,7 @@ ansible-inventory -i inventory/unifi.yaml --list
 
 ## Prerequisites
 
-- **Python 3.11+** installed
+- **Python 3.13+** installed
 - **Ansible 2.15+** installed
 - **UniFi OS controller** accessible via network (UDM, UCG, etc.)
 - **API credentials**: local admin username/password or API token
