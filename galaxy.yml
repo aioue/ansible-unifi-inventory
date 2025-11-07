@@ -17,7 +17,7 @@ readme: README.md
 # @nicks:irc/im.site#channel'
 authors:
 - Tom Paine (https://github.com/aioue)
-- Lenny Shirley (https://github.com/lennysh)
+- Lenny Shirley (https://github.com/lennysh) - Added the needed requirements so this can be used like an actual Ansible Collection
 
 
 ### OPTIONAL but strongly recommended
