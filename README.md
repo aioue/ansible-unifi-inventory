@@ -435,6 +435,16 @@ site: "branch-office"
 - The first run will be slower (2-10 seconds) as it fetches data from the API.
 - Subsequent runs within the TTL window will be very fast (< 100ms) as they read from the cache file.
 
+## Upgrading from pre-collection versions
+
+If you were using the plugin directly (copying `unifi.py` to your plugins directory), 1.0.0 has breaking changes:
+
+1. **Install the collection:** `ansible-galaxy collection install git+https://github.com/aioue/ansible-unifi-inventory.git`
+2. **Update inventory files:** change `plugin: unifi` to `plugin: aioue.network.unifi`
+3. **Update ansible.cfg:** remove `unifi` from `enable_plugins` (the collection is auto-discovered). If you had `inventory_plugins = ./plugins/inventory`, that line can also be removed
+4. **Remove the old plugin file** from `~/.ansible/plugins/inventory/` or your custom path
+5. **Python 3.12+** is now required (was 3.11+)
+
 ## Contributing
 
 For issues or enhancements, please ensure:
