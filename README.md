@@ -1,8 +1,6 @@
 # aioue.network
 
-# UniFi Dynamic Ansible Inventory
-
-Dynamic inventory plugin for Ansible that discovers hosts from a UniFi OS controller (UDM, UCG, etc.).
+Dynamic inventory plugin for Ansible that discovers hosts from a UniFi OS controller (UDM, UCG, etc.). Built on top of [aiounifi](https://github.com/Kane610/aiounifi).
 
 ```shell
 $ ansible-inventory -i inventory/unifi.yaml all --graph
