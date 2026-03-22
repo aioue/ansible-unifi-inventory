@@ -47,11 +47,11 @@ $ ansible-inventory -i inventory/unifi.yaml all --graph
 
 ## Prerequisites
 
-- **Python 3.13+**
+- **Python 3.12+** (newer `aiounifi` releases may require 3.13+; check `pip install` output)
 - **Ansible 2.15+**
 - **UniFi OS controller** accessible via network (UDM, UCG, etc.).
 - **API credentials**: A dedicated local admin user/password (2FA not supported) or an API token.
-- **Python Dependencies**: The collection requires the `aiounifi` library. You may need to install it in the same Python environment as Ansible:
+- **Python dependencies**: Install in the same Python environment as Ansible:
   ```bash
   pip install aiounifi aiohttp PyYAML
   ```
@@ -440,7 +440,7 @@ site: "branch-office"
 ## Contributing
 
 For issues or enhancements, please ensure:
-- Python 3.13+ compatibility
+- Python 3.12+ compatibility
 - Type hints for all functions
 - PEP 8 code style
 
