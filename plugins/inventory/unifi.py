@@ -16,7 +16,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 DOCUMENTATION = r"""
-    name: aioue.unifi.unifi
+    name: aioue.network.unifi
     plugin_type: inventory
     short_description: UniFi dynamic inventory plugin
     description:
@@ -28,7 +28,7 @@ DOCUMENTATION = r"""
         plugin:
             description: Name of the plugin
             required: true
-            choices: ['aioue.unifi.unifi']
+            choices: ['aioue.network.unifi']
         url:
             description: UniFi controller URL (e.g., https://192.168.1.1)
             required: true
@@ -90,7 +90,7 @@ DOCUMENTATION = r"""
 
 EXAMPLES = r"""
 # Example inventory file: inventory/unifi.yaml
-plugin: aioue.unifi.unifi
+plugin: aioue.network.unifi
 url: https://192.168.1.1
 username: admin
 password: secret
@@ -102,7 +102,7 @@ cache_ttl: 30
 cache_path: ./.cache/unifi_inventory.json
 
 # Example with token authentication
-plugin: aioue.unifi.unifi
+plugin: aioue.network.unifi
 url: https://192.168.1.1
 token: your-api-token-here
 verify_ssl: false
@@ -146,7 +146,7 @@ def sanitize_group_name(name: str) -> str:
 class InventoryModule(BaseInventoryPlugin, Cacheable):
     """UniFi dynamic inventory plugin"""
 
-    NAME = "aioue.unifi.unifi"
+    NAME = "aioue.network.unifi"
 
     def verify_file(self, path):
         """Verify that the inventory file is valid for this plugin"""
@@ -158,7 +158,7 @@ class InventoryModule(BaseInventoryPlugin, Cacheable):
             try:
                 with open(path, "r") as f:
                     content = f.read()
-                    if "plugin: aioue.unifi.unifi" in content or "plugin: 'aioue.unifi.unifi'" in content:
+                    if "plugin: aioue.network.unifi" in content or "plugin: 'aioue.network.unifi'" in content:
                         return True
             except Exception:
                 pass

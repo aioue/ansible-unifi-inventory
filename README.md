@@ -1,4 +1,4 @@
-# aioue.unifi
+# aioue.network
 
 # UniFi Dynamic Ansible Inventory
 
@@ -58,7 +58,7 @@ $ ansible-inventory -i inventory/unifi.yaml all --graph
 
 ## Installation
 
-You can install the `aioue.unifi` collection from this GitHub repository using the Ansible Galaxy CLI:
+You can install the `aioue.network` collection from this GitHub repository using the Ansible Galaxy CLI:
 
 ```shell
 ansible-galaxy collection install git+https://github.com/aioue/ansible-unifi-inventory.git
@@ -69,7 +69,7 @@ You can also include it in a `requirements.yml` file:
 ```yaml
 ---
 collections:
-  - name: aioue.unifi
+  - name: aioue.network
     source: https://github.com/aioue/ansible-unifi-inventory.git
     type: git
     # If you need a specific version, you can specify a branch or tag:
@@ -86,13 +86,13 @@ This is an Ansible inventory plugin. Configuration is done via a YAML inventory 
 
 Create a new inventory file (e.g., `unifi_inventory.yml`) with your settings.
 
-**Important:** You must use the Fully Qualified Collection Name (FQCN) `aioue.unifi.unifi` for the `plugin` key.
+**Important:** You must use the Fully Qualified Collection Name (FQCN) `aioue.network.unifi` for the `plugin` key.
 
 ```yaml
 # Example: unifi_inventory.yml
 
 # Use the FQCN for the plugin
-plugin: aioue.unifi.unifi
+plugin: aioue.network.unifi
 
 # UniFi controller URL (required)
 url: "https://192.168.1.1"
@@ -383,7 +383,7 @@ ansible-playbook -i unifi_inventory.yml site.yml
 Only include clients seen in the last 5 minutes:
 
 ```yaml
-plugin: aioue.unifi.unifi
+plugin: aioue.network.unifi
 url: "https://192.168.1.1"
 token: "your-token"
 last_seen_minutes: 5
@@ -394,7 +394,7 @@ last_seen_minutes: 5
 Include APs, switches, and gateways in the inventory:
 
 ```yaml
-plugin: aioue.unifi.unifi
+plugin: aioue.network.unifi
 url: "https://192.168.1.1"
 token: "your-token"
 include_devices: true
@@ -405,7 +405,7 @@ include_devices: true
 For real-time inventory without caching (will be slower and cause more API load):
 
 ```yaml
-plugin: aioue.unifi.unifi
+plugin: aioue.network.unifi
 url: "https://192.168.1.1"
 token: "your-token"
 cache_ttl: 0
@@ -417,7 +417,7 @@ For multi-site controllers, create separate inventory files for each site you wa
 
 **`site_default.yml`:**
 ```yaml
-plugin: aioue.unifi.unifi
+plugin: aioue.network.unifi
 url: "https://192.168.1.1"
 token: "your-token"
 site: "default"
@@ -425,7 +425,7 @@ site: "default"
 
 **`site_branch.yml`:**
 ```yaml
-plugin: aioue.unifi.unifi
+plugin: aioue.network.unifi
 url: "https://192.168.1.1"
 token: "your-token"
 site: "branch-office"
