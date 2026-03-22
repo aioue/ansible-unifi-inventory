@@ -20,7 +20,7 @@ $ ansible-inventory -i inventory/unifi.yaml all --graph
   |--@network_iot:
   |  |--Kitchen Echo
   |--@vlan_30:
-  |  |--Kithen Echo
+  |  |--Kitchen Echo
   |--@vlan_iot:
   |  |--Kitchen Echo
   |--@unifi_wired_clients:
