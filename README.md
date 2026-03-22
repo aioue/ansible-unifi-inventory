@@ -445,6 +445,19 @@ If you were using the plugin directly (copying `unifi.py` to your plugins direct
 4. **Remove the old plugin file** from `~/.ansible/plugins/inventory/` or your custom path
 5. **Python 3.12+** is now required (was 3.11+)
 
+## Releasing a New Version
+
+1. Bump `version:` in `galaxy.yml`
+2. Update `CHANGELOG.md`
+3. Commit, tag, and push:
+
+```bash
+git tag v1.x.x
+git push origin v1.x.x
+```
+
+The GitHub Actions workflow will build the collection, publish it to Ansible Galaxy, and create a GitHub Release automatically.
+
 ## Contributing
 
 For issues or enhancements, please ensure:
