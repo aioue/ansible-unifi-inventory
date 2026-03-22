@@ -8,7 +8,7 @@ UniFi Dynamic Ansible Inventory Plugin
 Discovers UniFi clients and optionally devices from a UniFi OS controller
 and provides them as Ansible inventory.
 
-This plugin can be used in YAML inventory files with the 'plugin: unifi' directive.
+This plugin can be used in YAML inventory files with the 'plugin: aioue.network.unifi' directive.
 """
 
 from __future__ import absolute_import, division, print_function
@@ -151,15 +151,15 @@ class InventoryModule(BaseInventoryPlugin, Cacheable):
     def verify_file(self, path):
         """Verify that the inventory file is valid for this plugin"""
         if super(InventoryModule, self).verify_file(path):
-            # Check if it's a YAML file with 'plugin: unifi'
             if path.endswith(("unifi.yaml", "unifi.yml")):
                 return True
-            # Also check file contents
             try:
+                import yaml
+
                 with open(path, "r") as f:
-                    content = f.read()
-                    if "plugin: aioue.network.unifi" in content or "plugin: 'aioue.network.unifi'" in content:
-                        return True
+                    data = yaml.safe_load(f)
+                if isinstance(data, dict) and data.get("plugin") == self.NAME:
+                    return True
             except Exception:
                 pass
         return False
