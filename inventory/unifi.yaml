@@ -2,7 +2,7 @@
 # This file uses the UniFi inventory plugin to dynamically discover hosts
 
 # Plugin directive tells Ansible to use the UniFi inventory plugin
-plugin: unifi
+plugin: aioue.network.unifi
 
 # UniFi controller URL (required)
 # The base URL of your UniFi OS controller (e.g., UDM, UCG)

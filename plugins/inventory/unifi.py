@@ -8,7 +8,7 @@ UniFi Dynamic Ansible Inventory Plugin
 Discovers UniFi clients and optionally devices from a UniFi OS controller
 and provides them as Ansible inventory.
 
-This plugin can be used in YAML inventory files with the 'plugin: unifi' directive.
+This plugin can be used in YAML inventory files with the 'plugin: aioue.network.unifi' directive.
 """
 
 from __future__ import absolute_import, division, print_function
@@ -16,7 +16,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 DOCUMENTATION = r"""
-    name: unifi
+    name: aioue.network.unifi
     plugin_type: inventory
     short_description: UniFi dynamic inventory plugin
     description:
@@ -28,7 +28,7 @@ DOCUMENTATION = r"""
         plugin:
             description: Name of the plugin
             required: true
-            choices: ['unifi']
+            choices: ['aioue.network.unifi']
         url:
             description: UniFi controller URL (e.g., https://192.168.1.1)
             required: true
@@ -90,7 +90,7 @@ DOCUMENTATION = r"""
 
 EXAMPLES = r"""
 # Example inventory file: inventory/unifi.yaml
-plugin: unifi
+plugin: aioue.network.unifi
 url: https://192.168.1.1
 username: admin
 password: secret
@@ -102,7 +102,7 @@ cache_ttl: 30
 cache_path: ./.cache/unifi_inventory.json
 
 # Example with token authentication
-plugin: unifi
+plugin: aioue.network.unifi
 url: https://192.168.1.1
 token: your-api-token-here
 verify_ssl: false
@@ -146,20 +146,20 @@ def sanitize_group_name(name: str) -> str:
 class InventoryModule(BaseInventoryPlugin, Cacheable):
     """UniFi dynamic inventory plugin"""
 
-    NAME = "unifi"
+    NAME = "aioue.network.unifi"
 
     def verify_file(self, path):
         """Verify that the inventory file is valid for this plugin"""
         if super(InventoryModule, self).verify_file(path):
-            # Check if it's a YAML file with 'plugin: unifi'
             if path.endswith(("unifi.yaml", "unifi.yml")):
                 return True
-            # Also check file contents
             try:
+                import yaml
+
                 with open(path, "r") as f:
-                    content = f.read()
-                    if "plugin: unifi" in content or "plugin: 'unifi'" in content:
-                        return True
+                    data = yaml.safe_load(f)
+                if isinstance(data, dict) and data.get("plugin") == self.NAME:
+                    return True
             except Exception:
                 pass
         return False
