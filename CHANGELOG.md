@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.2 (2026-07-22)
+
+**Fixes:**
+
+- Serialize UniFi device enums (e.g. `DeviceState`) for Ansible inventory host variables when `include_devices: true`
+
+**Documentation:**
+
+- Refresh README inventory examples from a live run (clients, VLAN/SSID groups, and UniFi devices)
+
 ## 1.1.1 (2026-07-22)
 
 **Fixes:**

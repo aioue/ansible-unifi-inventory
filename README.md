@@ -14,26 +14,85 @@ $ ansible-inventory -i inventory/unifi.yaml all --graph
   |--@unifi_clients:
   |  |--phone
   |  |--laptop
-  |  |--Kitchen Echo
-  |  |--pc
-  |  |--console
-  |  |--nas
+  |  |--Kitchen_Echo
+  |  |--nas-server
+  |  |--Living_Room_Chromecast
   |--@unifi_wireless_clients:
   |  |--phone
+  |  |--Kitchen_Echo
+  |  |--Living_Room_Chromecast
+  |--@unifi_wired_clients:
+  |  |--laptop
+  |  |--nas-server
   |--@network_default:
   |  |--laptop
+  |  |--nas-server
   |--@network_iot:
-  |  |--Kitchen Echo
+  |  |--Kitchen_Echo
+  |  |--Living_Room_Chromecast
   |--@vlan_30:
-  |  |--Kitchen Echo
+  |  |--Kitchen_Echo
   |--@vlan_iot:
-  |  |--Kitchen Echo
-  |--@unifi_wired_clients:
-  |  |--pc
-  |  |--console
-  |  |--nas
-  |--@ssid_iot:
-  |  |--Kitchen Echo
+  |  |--Kitchen_Echo
+  |--@ssid_home_iot:
+  |  |--Kitchen_Echo
+  |  |--Living_Room_Chromecast
+  |--@ssid_home_wifi:
+  |  |--phone
+  |--@unifi_devices:
+  |  |--U6_Pro
+  |  |--USW_Flex
+  |  |--Dream_Machine
+  |--@unifi_uap:
+  |  |--U6_Pro
+  |--@unifi_usw:
+  |  |--USW_Flex
+  |--@unifi_udm:
+  |  |--Dream_Machine
+```
+
+Example host variables (`include_devices: true` in the inventory file):
+
+```shell
+$ ansible-inventory -i inventory/unifi.yaml --host Kitchen_Echo
+{
+  "ansible_host": "192.168.30.13",
+  "ip": "192.168.30.13",
+  "mac": "48:78:5e:fa:7c:e1",
+  "is_wired": false,
+  "ssid": "home.iot",
+  "vlan": 30,
+  "vlan_name": "IoT",
+  "network": "IoT",
+  "oui": "Amazon Technologies Inc.",
+  "last_seen_iso": "2026-07-22T18:10:14Z",
+  "unifi_name": "Kitchen Echo"
+}
+
+$ ansible-inventory -i inventory/unifi.yaml --host nas-server
+{
+  "ansible_host": "192.168.1.148",
+  "ip": "192.168.1.148",
+  "mac": "bc:24:11:af:77:dd",
+  "is_wired": true,
+  "network": "Default",
+  "oui": "Example Vendor Inc.",
+  "last_seen_iso": "2026-07-22T18:09:59Z",
+  "unifi_name": "nas-server"
+}
+
+$ ansible-inventory -i inventory/unifi.yaml --host U6_Pro
+{
+  "ansible_host": "192.168.1.252",
+  "ip": "192.168.1.252",
+  "mac": "ac:8b:a9:43:b5:cd",
+  "model": "UAP6MP",
+  "type": "uap",
+  "firmware_version": "6.8.2.15592",
+  "adopted": true,
+  "state": "CONNECTED",
+  "unifi_name": "U6 Pro"
+}
 ```
 
 ## What This Is
@@ -314,7 +373,7 @@ The plugin creates these dynamic groups:
 - `unifi_devices` - all UniFi devices
 - `unifi_uap` - UniFi access points
 - `unifi_usw` - UniFi switches
-- `unifi_ugw` / `unifi_uxg` / `unifi_ucg` - UniFi gateways
+- `unifi_ugw` / `unifi_uxg` / `unifi_ucg` / `unifi_udm` - UniFi gateways
 
 Additional groups can be created with `keyed_groups` (see above).
 

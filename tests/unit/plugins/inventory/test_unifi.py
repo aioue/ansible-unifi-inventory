@@ -12,6 +12,7 @@ from ansible.parsing.dataloader import DataLoader
 
 from ansible_collections.aioue.network.plugins.inventory.unifi import (
     InventoryModule,
+    _inventory_value,
     mac_to_hostname,
     sanitize_group_name,
     sanitize_hostname,
@@ -44,6 +45,15 @@ def test_sanitize_hostname(raw: str, expected: str) -> None:
 
 def test_mac_to_hostname() -> None:
     assert mac_to_hostname("AA:BB:CC:DD:EE:FF") == "aa-bb-cc-dd-ee-ff"
+
+
+def test_inventory_value_serializes_enum() -> None:
+    import enum
+
+    class SampleState(enum.IntEnum):
+        CONNECTED = 1
+
+    assert _inventory_value(SampleState.CONNECTED) == "CONNECTED"
 
 
 def test_template_option_resolves_jinja() -> None:

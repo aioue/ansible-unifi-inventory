@@ -135,6 +135,7 @@ keyed_groups:
 
 import asyncio
 import concurrent.futures
+import enum
 import logging
 import re
 import time
@@ -181,6 +182,21 @@ def sanitize_hostname(name: str) -> str:
 def mac_to_hostname(mac: str) -> str:
     """Convert a MAC address to a stable inventory hostname."""
     return mac.replace(":", "-").lower()
+
+
+def _inventory_value(value: Any) -> Any:
+    """Return a JSON-serializable value for Ansible inventory host variables."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, enum.Enum):
+        return value.name
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_inventory_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _inventory_value(item) for key, item in value.items()}
+    return str(value)
 
 
 def _iter_handler_items(handler: Any) -> Iterable[Tuple[str, Any]]:
@@ -472,11 +488,11 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         hostname_mode = self.get_option("hostname")
         hostname, unifi_name = self._resolve_device_hostname(mac, device, hostname_mode)
 
-        dev_type = getattr(device, "type", "unknown")
-        model = getattr(device, "model", "unknown")
-        firmware = getattr(device, "version", "unknown")
-        adopted = getattr(device, "adopted", False)
-        state = getattr(device, "state", "unknown")
+        dev_type = _inventory_value(getattr(device, "type", "unknown"))
+        model = _inventory_value(getattr(device, "model", "unknown"))
+        firmware = _inventory_value(getattr(device, "version", "unknown"))
+        adopted = _inventory_value(getattr(device, "adopted", False))
+        state = _inventory_value(getattr(device, "state", None))
 
         hostvars = {
             "ansible_host": ip,
@@ -487,8 +503,9 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             "firmware_version": firmware,
             "site": self.get_option("site"),
             "adopted": adopted,
-            "state": state,
         }
+        if state is not None:
+            hostvars["state"] = state
 
         if unifi_name is not None:
             hostvars["unifi_name"] = unifi_name
@@ -512,7 +529,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
             self.inventory.add_host(hostname)
             for key, value in hostvars.items():
-                self.inventory.set_variable(hostname, key, value)
+                self.inventory.set_variable(hostname, key, _inventory_value(value))
 
             self._set_composite_vars(
                 self.get_option("compose"), hostvars, hostname, strict=strict
