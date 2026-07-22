@@ -446,6 +446,10 @@ The plugin creates these dynamic groups:
 - `unifi_uap` - UniFi access points
 - `unifi_usw` - UniFi switches
 - `unifi_ugw` / `unifi_uxg` / `unifi_ucg` / `unifi_udm` - UniFi gateways
+- `device_state_<state>` - devices by state (e.g. `device_state_connected`)
+- `unifi_upgradable` - devices with firmware updates available
+- `unifi_overheating` - devices reporting overheating
+- `unifi_poe_powered` - switches with at least one PoE port delivering power
 
 Additional groups can be created with `keyed_groups` (see above).
 
@@ -473,6 +477,13 @@ Each client host includes:
 - `is_guest` - boolean, true for guest network clients
 - `blocked` - boolean, true when blocked in UniFi
 - `firmware_version` - Client firmware version (when reported by UniFi)
+- `fixed_ip` - DHCP reservation / static IP (when configured)
+- `unifi_hostname` - Client hostname from UniFi (distinct from inventory hostname)
+- `device_name` - UniFi device name field (when set)
+- `first_seen` / `association_time` / `latest_association_time` - Client lifecycle timestamps
+- `switch_depth` - Switch hops for wired clients
+- `wired_rate_mbps` - Negotiated link speed (wired clients)
+- `powersave_enabled` - Wireless power-save state
 
 ### Host Variables (Devices)
 
@@ -494,9 +505,13 @@ Each device host includes:
 - `uptime` - Device uptime in seconds
 - `uplink_depth` - Hops to gateway
 - `client_count` - Connected client count (`user_num_sta`)
-- `uplink` - Uplink details (type, remote MAC, etc.)
+- `uplink` - Compact uplink summary (type, speed, remote device; no rx/tx counters)
 - `cpu_percent` / `mem_percent` / `system_uptime` - From `system-stats`
 - `poe_ports` - List of PoE-capable switch ports with power state (switches only)
+- `outlets` - PDU/outlet relay state (gateways and outlet-capable devices)
+- `general_temperature` / `fan_level` / `has_fan` / `has_temperature` - Thermal state
+- `last_seen` - Device last-seen timestamp
+- `supports_led_ring` / `led_override` / `led_override_color` - LED state (read-only)
 
 ## Configuration Options Reference
 

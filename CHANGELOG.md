@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.5 (2026-07-22)
+
+**Improvements (closes parts of #4):**
+
+- Client host variables: `fixed_ip`, `unifi_hostname`, `device_name`, lifecycle timestamps, `switch_depth`, `wired_rate_mbps`, `powersave_enabled`
+- Device host variables: thermal fields, `last_seen`, LED state, `outlets` summary
+- Trim `uplink` to a compact summary (drops rx/tx counters)
+- Device groups: `device_state_*`, `unifi_upgradable`, `unifi_overheating`, `unifi_poe_powered`
+
 ## 1.1.4 (2026-07-22)
 
 **Fixes:**

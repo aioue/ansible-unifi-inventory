@@ -15,9 +15,11 @@ from ansible.parsing.dataloader import DataLoader
 
 from ansible_collections.aioue.network.plugins.inventory.unifi import (
     InventoryModule,
+    _build_outlets,
     _build_poe_ports,
     _inventory_value,
     _login_rate_limit_message,
+    _summarize_uplink,
     mac_to_hostname,
     sanitize_group_name,
     sanitize_hostname,
@@ -90,6 +92,52 @@ def test_login_rate_limit_message(error: Exception, expected_substring: str | No
     else:
         assert message is not None
         assert expected_substring in message.lower()
+
+
+def test_summarize_uplink_strips_counters() -> None:
+    uplink = {
+        "type": "wire",
+        "up": True,
+        "speed": 1000,
+        "uplink_mac": "aa:bb:cc:dd:ee:00",
+        "rx_bytes": 999999,
+        "tx_packets": 12345,
+    }
+
+    summary = _summarize_uplink(uplink)
+
+    assert summary == {
+        "type": "wire",
+        "up": True,
+        "speed": 1000,
+        "uplink_mac": "aa:bb:cc:dd:ee:00",
+    }
+    assert "rx_bytes" not in summary
+
+
+def test_build_outlets_summarizes_relay_state() -> None:
+    device = SimpleNamespace(
+        outlet_table=[
+            {
+                "index": 1,
+                "name": "WAN",
+                "relay_state": True,
+                "cycle_enabled": False,
+            }
+        ]
+    )
+
+    outlets = _build_outlets(device)
+
+    assert outlets == [
+        {
+            "index": 1,
+            "name": "WAN",
+            "relay_state": True,
+            "cycle_enabled": False,
+            "outlet_caps": None,
+        }
+    ]
 
 
 def test_build_poe_ports_filters_non_poe_ports() -> None:
@@ -167,6 +215,40 @@ def test_resolve_client_hostname(
     assert unifi_name == expected_unifi_name
 
 
+def test_build_client_host_includes_extended_client_fields() -> None:
+    plugin = InventoryModule()
+    client = SimpleNamespace(
+        last_seen=1_700_000_000,
+        ip="192.168.1.50",
+        raw={"ip": "192.168.1.50"},
+        name="nas-server",
+        hostname="tank.local",
+        device_name="tank",
+        fixed_ip="192.168.1.148",
+        first_seen=1_600_000_000,
+        association_time=1_699_000_000,
+        latest_association_time=1_699_500_000,
+        is_wired=True,
+        switch_depth=2,
+        wired_rate_mbps=1000,
+        oui="Example Vendor",
+    )
+
+    with patch.object(plugin, "get_option", side_effect=lambda key: "name" if key == "hostname" else "default"):
+        host = plugin._build_client_host(
+            "aa:bb:cc:dd:ee:ff",
+            client,
+            vlan_names={},
+            current_time=1_700_000_100,
+            last_seen_threshold=3600,
+        )
+
+    assert host is not None
+    assert host["hostvars"]["fixed_ip"] == "192.168.1.148"
+    assert host["hostvars"]["unifi_hostname"] == "tank.local"
+    assert host["hostvars"]["wired_rate_mbps"] == 1000
+
+
 def test_build_client_host_includes_guest_and_firmware_flags() -> None:
     plugin = InventoryModule()
     client = SimpleNamespace(
@@ -216,7 +298,7 @@ def test_build_device_host_serializes_state_and_poe_ports() -> None:
         uptime=12345,
         uplink_depth=1,
         user_num_sta=8,
-        uplink={"type": "wire", "uplink_mac": "aa:bb:cc:dd:ee:00"},
+        uplink={"type": "wire", "uplink_mac": "aa:bb:cc:dd:ee:00", "rx_bytes": 1},
         system_stats=("12", "34", "12345"),
         port_table=[
             {
@@ -244,7 +326,13 @@ def test_build_device_host_serializes_state_and_poe_ports() -> None:
     assert host["hostvars"]["state"] == "CONNECTED"
     assert host["hostvars"]["client_count"] == 8
     assert host["hostvars"]["cpu_percent"] == "12"
+    assert host["hostvars"]["uplink"] == {
+        "type": "wire",
+        "uplink_mac": "aa:bb:cc:dd:ee:00",
+    }
+    assert "device_state_connected" in host["groups"]
     assert len(host["hostvars"]["poe_ports"]) == 1
+    assert "unifi_poe_powered" in host["groups"]
     json.dumps(host["hostvars"])
 
 

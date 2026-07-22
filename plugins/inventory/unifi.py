@@ -245,6 +245,53 @@ def _build_poe_ports(device: Any) -> List[Dict[str, Any]]:
     return _inventory_value(ports)
 
 
+def _summarize_uplink(uplink: Any) -> Dict[str, Any]:
+    """Return a compact uplink summary without rx/tx counter noise."""
+    if not isinstance(uplink, dict):
+        return _inventory_value(uplink)
+
+    summary = {
+        key: uplink.get(key)
+        for key in (
+            "type",
+            "up",
+            "speed",
+            "max_speed",
+            "media",
+            "name",
+            "port_idx",
+            "uplink_mac",
+            "uplink_device_name",
+            "uplink_remote_port",
+            "uplink_source",
+            "full_duplex",
+        )
+        if uplink.get(key) is not None
+    }
+    return _inventory_value(summary)
+
+
+def _build_outlets(device: Any) -> List[Dict[str, Any]]:
+    """Summarize PDU/outlet state from a UniFi device."""
+    outlet_table = getattr(device, "outlet_table", None) or []
+    outlets: List[Dict[str, Any]] = []
+
+    for outlet in outlet_table:
+        if not isinstance(outlet, dict):
+            continue
+        outlets.append(
+            {
+                "index": outlet.get("index"),
+                "name": outlet.get("name"),
+                "relay_state": outlet.get("relay_state"),
+                "cycle_enabled": outlet.get("cycle_enabled"),
+                "outlet_caps": outlet.get("outlet_caps"),
+            }
+        )
+
+    return _inventory_value(outlets)
+
+
 def _set_optional_hostvar(
     hostvars: Dict[str, Any], key: str, value: Any
 ) -> None:
@@ -526,6 +573,36 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         if firmware_version:
             hostvars["firmware_version"] = firmware_version
 
+        _set_optional_hostvar(hostvars, "fixed_ip", getattr(client, "fixed_ip", None))
+        _set_optional_hostvar(
+            hostvars, "unifi_hostname", getattr(client, "hostname", None)
+        )
+        _set_optional_hostvar(
+            hostvars, "device_name", getattr(client, "device_name", None)
+        )
+        _set_optional_hostvar(
+            hostvars, "first_seen", getattr(client, "first_seen", None)
+        )
+        _set_optional_hostvar(
+            hostvars, "association_time", getattr(client, "association_time", None)
+        )
+        _set_optional_hostvar(
+            hostvars,
+            "latest_association_time",
+            getattr(client, "latest_association_time", None),
+        )
+        if is_wired:
+            _set_optional_hostvar(
+                hostvars, "switch_depth", getattr(client, "switch_depth", None)
+            )
+            _set_optional_hostvar(
+                hostvars, "wired_rate_mbps", getattr(client, "wired_rate_mbps", None)
+            )
+        else:
+            _set_optional_hostvar(
+                hostvars, "powersave_enabled", getattr(client, "powersave_enabled", None)
+            )
+
         groups = ["unifi_clients"]
         if is_wired:
             groups.append("unifi_wired_clients")
@@ -585,7 +662,30 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         _set_optional_hostvar(
             hostvars, "client_count", getattr(device, "user_num_sta", None)
         )
-        _set_optional_hostvar(hostvars, "uplink", getattr(device, "uplink", None))
+        uplink = getattr(device, "uplink", None)
+        if uplink:
+            hostvars["uplink"] = _summarize_uplink(uplink)
+
+        _set_optional_hostvar(
+            hostvars, "general_temperature", getattr(device, "general_temperature", None)
+        )
+        _set_optional_hostvar(hostvars, "fan_level", getattr(device, "fan_level", None))
+        _set_optional_hostvar(hostvars, "has_fan", getattr(device, "has_fan", None))
+        _set_optional_hostvar(
+            hostvars, "has_temperature", getattr(device, "has_temperature", None)
+        )
+        _set_optional_hostvar(hostvars, "last_seen", getattr(device, "last_seen", None))
+        _set_optional_hostvar(
+            hostvars, "supports_led_ring", getattr(device, "supports_led_ring", None)
+        )
+        _set_optional_hostvar(
+            hostvars, "led_override", getattr(device, "led_override", None)
+        )
+        _set_optional_hostvar(
+            hostvars,
+            "led_override_color",
+            getattr(device, "led_override_color", None),
+        )
 
         try:
             cpu, mem, uptime = device.system_stats
@@ -599,10 +699,27 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         if poe_ports:
             hostvars["poe_ports"] = poe_ports
 
+        outlets = _build_outlets(device)
+        if outlets:
+            hostvars["outlets"] = outlets
+
         if unifi_name is not None:
             hostvars["unifi_name"] = unifi_name
 
         groups = ["unifi_devices", sanitize_group_name(f"unifi_{dev_type}")]
+
+        state = hostvars.get("state")
+        if state:
+            groups.append(sanitize_group_name(f"device_state_{state}"))
+
+        if hostvars.get("upgradable"):
+            groups.append("unifi_upgradable")
+
+        if hostvars.get("overheating"):
+            groups.append("unifi_overheating")
+
+        if poe_ports and any(port.get("poe_good") for port in poe_ports):
+            groups.append("unifi_poe_powered")
 
         return {"hostname": hostname, "hostvars": hostvars, "groups": groups}
 
