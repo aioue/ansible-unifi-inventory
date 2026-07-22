@@ -40,6 +40,8 @@ jobs:
             --exclude dist \
             --exclude ansible_collections \
             ./ ansible_collections/aioue/network/
+          ansible-galaxy collection install community.library_inventory_filtering_v1 \
+            -p ansible_collections
 
       - name: Run ansible-test sanity
         working-directory: ansible_collections/aioue/network

@@ -86,7 +86,9 @@ DOCUMENTATION = r"""
             env:
                 - name: UNIFI_HOSTNAME
         filters:
-            # This option is provided by the community.library_inventory_filtering_v1.inventory_filter doc fragment
+            description:
+                - A dict of filter definitions used to include or exclude hosts from the inventory.
+                - See O(community.library_inventory_filtering_v1.inventory_filter#filters) for syntax.
             version_added: 1.1.0
 """
 
