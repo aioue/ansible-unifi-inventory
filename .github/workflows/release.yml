@@ -19,13 +19,40 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Ansible
-        run: pip install ansible-core
+      - name: Install Ansible and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible-core aiounifi aiohttp pytest
+          pip install -r tests/unit/requirements.txt
+          ansible-galaxy collection install community.library_inventory_filtering_v1
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -q
+
+      - name: Prepare collection tree for ansible-test
+        run: |
+          mkdir -p ansible_collections/aioue
+          rsync -a \
+            --exclude .git \
+            --exclude .venv \
+            --exclude .pytest_cache \
+            --exclude tests/_ansible_collections \
+            --exclude dist \
+            --exclude ansible_collections \
+            ./ ansible_collections/aioue/network/
+
+      - name: Run ansible-test sanity
+        working-directory: ansible_collections/aioue/network
+        env:
+          ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}/ansible_collections
+        run: ansible-test sanity --local --color no
 
       - name: Build collection
+        working-directory: ${{ github.workspace }}
         run: ansible-galaxy collection build --output-path dist/
 
       - name: Publish to Ansible Galaxy
+        working-directory: ${{ github.workspace }}
         run: ansible-galaxy collection publish dist/*.tar.gz --token "${{ secrets.GALAXY_API_TOKEN }}"
 
       - name: Create GitHub Release

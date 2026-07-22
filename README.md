@@ -51,12 +51,12 @@ $ ansible-inventory -i inventory/unifi.yaml all --graph
 - **API credentials**: A dedicated local admin user/password (2FA not supported) or an API token.
 - **Python dependencies**: Install in the same Python environment as Ansible:
   ```bash
-  pip install aiounifi aiohttp PyYAML
+  pip install -r requirements.txt
   ```
 
 ## Installation
 
-You can install the `aioue.network` collection from this GitHub repository using the Ansible Galaxy CLI:
+Install the `aioue.network` collection from this GitHub repository:
 
 ```shell
 ansible-galaxy collection install git+https://github.com/aioue/ansible-unifi-inventory.git
@@ -71,25 +71,30 @@ collections:
     source: https://github.com/aioue/ansible-unifi-inventory.git
     type: git
     # If you need a specific version, you can specify a branch or tag:
-    # version: main
+    # version: v1.1.0
 ```
 
-Then, install it with `ansible-galaxy collection install -r requirements.yml`.
+Then install with `ansible-galaxy collection install -r requirements.yml`.
 
 ## Configuration
 
 This is an Ansible inventory plugin. Configuration is done via a YAML inventory file that uses the plugin.
 
+### Inventory File Naming
+
+Name inventory files `*.unifi.yml` or `*.unifi.yaml` so Ansible auto-detects the plugin without listing it in `enable_plugins`. Examples: `prod.unifi.yml`, `inventory/unifi.yaml`.
+
+If you use a different filename, set `plugin: aioue.network.unifi` explicitly in the file.
+
 ### Create an Inventory File
 
-Create a new inventory file (e.g., `unifi_inventory.yml`) with your settings.
+Create a new inventory file (e.g., `prod.unifi.yml`) with your settings.
 
-**Important:** You must use the Fully Qualified Collection Name (FQCN) `aioue.network.unifi` for the `plugin` key.
+**Important:** Use the Fully Qualified Collection Name (FQCN) `aioue.network.unifi` for the `plugin` key.
 
 ```yaml
-# Example: unifi_inventory.yml
+# Example: prod.unifi.yml
 
-# Use the FQCN for the plugin
 plugin: aioue.network.unifi
 
 # UniFi controller URL (required)
@@ -99,7 +104,6 @@ url: "https://192.168.1.1"
 # Provide EITHER token OR username/password
 
 # API Token (Preferred method)
-# Leave empty to use username/password
 token: "your-api-token-here"
 
 # Username/Password (Alternative)
@@ -108,25 +112,108 @@ username: "ansible-admin"
 password: "your-password"
 # ---------------------
 
-# UniFi site name
+# Templated credentials (e.g. Ansible Vault lookups) are also supported:
+# username: "{{ lookup('ansible.builtin.unvault', 'secrets.yml') | from_yaml | json_query('unifi_username') }}"
+# password: "{{ lookup('ansible.builtin.unvault', 'secrets.yml') | from_yaml | json_query('unifi_password') }}"
+
 site: "default"
-
-# Set to false for self-signed certificates
 verify_ssl: false
-
-# Set to true to include APs, switches, etc.
 include_devices: false
-
-# Only include clients seen in the last 30 minutes
 last_seen_minutes: 30
 
-# Cache API results for 30 seconds
-cache_ttl: 30
+# Optional: use MAC-based hostnames when device names are missing or unstable
+# hostname: mac
 ```
+
+### Hostname Option
+
+The `hostname` option controls which UniFi field becomes the Ansible inventory hostname:
+
+| Value | Source |
+|-------|--------|
+| `name` (default) | UniFi friendly name with sanitization; original stored in `unifi_name` |
+| `mac` | MAC address with colons replaced by hyphens (e.g. `aa-bb-cc-dd-ee-ff`) |
+
+When using `name`, hosts without a friendly name fall back to OUI plus MAC suffix, or the raw MAC.
+When using `mac`, the friendly name (if any) is still available in the `unifi_name` host variable.
+
+### Constructable Inventory (keyed_groups, compose, filters)
+
+The plugin supports standard Constructable inventory options for dynamic grouping and host variable composition.
+
+**keyed_groups** - create groups from host variables:
+
+```yaml
+plugin: aioue.network.unifi
+url: "https://192.168.1.1"
+token: "your-token"
+
+keyed_groups:
+  - key: ssid
+    prefix: ssid
+    separator: "_"
+  - key: vlan_name
+    prefix: vlan
+    separator: "_"
+  - key: network
+    prefix: network
+    separator: "_"
+```
+
+**compose** - set or override host variables:
+
+```yaml
+plugin: aioue.network.unifi
+url: "https://192.168.1.1"
+token: "your-token"
+
+compose:
+  ansible_host: ip | default(ipv6)
+  device_label: name | default(mac)
+```
+
+**filters** - include or exclude hosts (requires `community.library_inventory_filtering_v1`):
+
+```yaml
+plugin: aioue.network.unifi
+url: "https://192.168.1.1"
+token: "your-token"
+
+filters:
+  - include: is_wired
+  - exclude: ssid == "Guest"
+```
+
+### Inventory Caching
+
+As of 1.1.0, use Ansible's built-in inventory caching instead of plugin-specific `cache_ttl` / `cache_path` options (removed in 1.1.0).
+
+Configure caching in `ansible.cfg`:
+
+```ini
+[inventory]
+cache = true
+cache_plugin = ansible.builtin.jsonfile
+cache_timeout = 30
+cache_connection = /tmp/ansible_inventory_cache
+```
+
+Or per inventory source in your inventory file:
+
+```yaml
+plugin: aioue.network.unifi
+url: "https://192.168.1.1"
+token: "your-token"
+cache: true
+cache_plugin: ansible.builtin.jsonfile
+cache_timeout: 30
+```
+
+See [Ansible inventory cache documentation](https://docs.ansible.com/ansible/latest/inventory_guide/index.html#inventory-plugins-and-caching) for available cache plugins and options.
 
 ### Environment Variables
 
-You can also provide configuration via environment variables, which will override settings in the YAML file.
+You can also provide configuration via environment variables, which override settings in the YAML file.
 
 ```bash
 export UNIFI_URL=https://192.168.1.1
@@ -137,50 +224,45 @@ export UNIFI_VERIFY_SSL=false
 
 ## Usage
 
-Once your collection is installed and your `unifi_inventory.yml` file is created, you can use it like any other Ansible inventory source.
+Once the collection is installed and your inventory file is created, use it like any other Ansible inventory source.
 
 ### Use With ansible-inventory
 
 ```bash
 # View full inventory as JSON
-ansible-inventory -i unifi_inventory.yml --list
+ansible-inventory -i prod.unifi.yml --list
 
 # Show hosts in a specific group
-ansible-inventory -i unifi_inventory.yml --graph unifi_wired_clients
+ansible-inventory -i prod.unifi.yml --graph unifi_wired_clients
 
 # See graph of all groups
-ansible-inventory -i unifi_inventory.yml --graph
+ansible-inventory -i prod.unifi.yml --graph
 ```
 
 ### Use With Ansible Ad-Hoc Commands
 
 ```bash
 # Ping all discovered hosts
-ansible -i unifi_inventory.yml all -m ping
+ansible -i prod.unifi.yml all -m ping
 
 # Target only wireless clients
-ansible -i unifi_inventory.yml unifi_wireless_clients -m shell -a "uptime"
+ansible -i prod.unifi.yml unifi_wireless_clients -m shell -a "uptime"
 
 # Target a specific SSID group
-ansible -i unifi_inventory.yml ssid_guest_wifi -m shell -a "uptime"
+ansible -i prod.unifi.yml ssid_guest_wifi -m shell -a "uptime"
 ```
 
 ### Use With Ansible Playbooks
 
 ```bash
-# Run a playbook against your UniFi inventory
-ansible-playbook -i unifi_inventory.yml site.yml
-
-# Limit the playbook to a dynamic group
-ansible-playbook -i unifi_inventory.yml site.yml --limit unifi_clients
+ansible-playbook -i prod.unifi.yml site.yml
+ansible-playbook -i prod.unifi.yml site.yml --limit unifi_clients
 ```
 
 ### Using Multiple Inventory Sources
 
-Ansible can merge multiple inventory sources.
-
 ```bash
-ansible-playbook -i static_hosts.yml -i unifi_inventory.yml site.yml
+ansible-playbook -i static_hosts.yml -i prod.unifi.yml site.yml
 ```
 
 ## Authentication
@@ -189,23 +271,24 @@ Two authentication methods are supported.
 
 ### API Token (Preferred)
 
-1.  Log in to your UniFi controller as a **local** admin user.
-2.  Go to `Settings > Network > Control Plane > Integrations > Network API` (or similar path).
-3.  Create a new token.
-4.  Use this token for the `token` config option or the `UNIFI_TOKEN` environment variable.
+1. Log in to your UniFi controller as a **local** admin user.
+2. Go to `Settings > Network > Control Plane > Integrations > Network API` (or similar path).
+3. Create a new token.
+4. Use this token for the `token` config option or the `UNIFI_TOKEN` environment variable.
 
 ### Username/Password
 
 You must use a **local admin account** (not a ui.com SSO account) and **2FA must be disabled** for this account.
 
-1.  Go to `UniFi OS Settings > Admins & Users`.
-2.  Create a new user.
-3.  Select "Admin" role.
-4.  **Crucially, select "Restrict to Local Access Only"**.
-5.  Do **NOT** enable 2FA for this account.
-6.  Use these credentials for the `username`/`password` config options or the `UNIFI_USERNAME`/`UNIFI_PASSWORD` environment variables.
+1. Go to `UniFi OS Settings > Admins & Users`.
+2. Create a new user with the "Admin" role.
+3. Select **Restrict to Local Access Only**.
+4. Do **NOT** enable 2FA for this account.
+5. Use these credentials for `username`/`password` or `UNIFI_USERNAME`/`UNIFI_PASSWORD`.
 
 **Note:** If both token and username/password are provided, the **token takes precedence**.
+
+Connection options (`url`, `username`, `password`, `token`) support Jinja2 templating, so you can reference Ansible Vault lookups or variables directly in the inventory file.
 
 ## Inventory Schema
 
@@ -227,6 +310,8 @@ The plugin creates these dynamic groups:
 - `unifi_uap` - UniFi access points
 - `unifi_usw` - UniFi switches
 - `unifi_ugw` / `unifi_uxg` / `unifi_ucg` - UniFi gateways
+
+Additional groups can be created with `keyed_groups` (see above).
 
 ### Host Variables (Clients)
 
@@ -275,27 +360,23 @@ Each device host includes:
 | Verify SSL | `UNIFI_VERIFY_SSL` | `verify_ssl` | `true` |
 | Include Devices | `UNIFI_INCLUDE_DEVICES` | `include_devices` | `false` |
 | Last Seen Minutes | `UNIFI_LAST_SEEN_MINUTES` | `last_seen_minutes` | `30` |
-| Cache TTL | `UNIFI_CACHE_TTL` | `cache_ttl` | `30` |
-| Cache Path | `UNIFI_CACHE_PATH` | `cache_path` | `./.cache/unifi_inventory.json` |
+| Hostname Source | `UNIFI_HOSTNAME` | `hostname` | `name` |
+
+Inventory caching is configured via standard Ansible options (`cache`, `cache_plugin`, `cache_timeout`), not plugin-specific keys.
 
 ## Security Best Practices
 
 ### Don't Commit Secrets
 
-- **Never commit** your `unifi_inventory.yml` file with real credentials.
+- **Never commit** inventory files with real credentials.
 - Use a local file and add it to `.gitignore`.
 - Use Ansible Vault to encrypt the inventory file.
 
 ### Use Ansible Vault
 
-Encrypt your sensitive inventory file:
-
 ```bash
-# Encrypt config file
-ansible-vault encrypt unifi_inventory.yml
-
-# Use with inventory
-ansible-playbook -i unifi_inventory.yml site.yml --ask-vault-pass
+ansible-vault encrypt prod.unifi.yml
+ansible-playbook -i prod.unifi.yml site.yml --ask-vault-pass
 ```
 
 ### Use Environment Variables
@@ -305,13 +386,13 @@ For CI/CD pipelines, use environment variables to inject secrets.
 ```bash
 export UNIFI_URL=https://192.168.1.1
 export UNIFI_TOKEN=$VAULT_UNIFI_TOKEN
-ansible-playbook -i unifi_inventory.yml site.yml
+ansible-playbook -i prod.unifi.yml site.yml
 ```
 
 ### Token vs Password
 
 - Prefer **API tokens** over username/password.
-- Tokens can be easily revoked without changing account credentials.
+- Tokens can be revoked without changing account credentials.
 
 ## Troubleshooting
 
@@ -335,7 +416,7 @@ ansible-playbook -i unifi_inventory.yml site.yml
 
 **Solution:**
 - Verify credentials.
-- **You MUST use a local admin account with 2FA disabled.** See the "Authentication" section for instructions on how to create one.
+- **You MUST use a local admin account with 2FA disabled.** See the "Authentication" section.
 - Regenerate your API token.
 
 ### No Hosts Returned
@@ -346,20 +427,22 @@ ansible-playbook -i unifi_inventory.yml site.yml
 - `last_seen_minutes` threshold is too low.
 - No clients have been active recently.
 - Wrong `site` name specified.
+- `filters` excluding all hosts.
 
 **Solution:**
-- Increase `last_seen_minutes` to `1440` (24 hours) to see if stale clients appear.
-- Verify your `site` name in the UniFi controller (it's often `default`).
-- Enable devices to see your infrastructure: `include_devices: true`.
+- Increase `last_seen_minutes` to `1440` (24 hours).
+- Verify your `site` name in the UniFi controller (often `default`).
+- Enable devices: `include_devices: true`.
+- Review `filters` rules.
 
-### Stale Cache Data
+### Stale Inventory Data
 
 **Symptom:** Inventory doesn't reflect recent changes (new clients, IP changes).
 
 **Solution:**
-- Clear the cache file: `rm ./.cache/unifi_inventory.json` (or the path set in `cache_path`).
-- Reduce `cache_ttl` for more frequent updates.
-- Set `cache_ttl: 0` to disable caching entirely (not recommended for frequent runs).
+- Clear the Ansible inventory cache directory (path set in `cache_connection`).
+- Reduce `cache_timeout` for more frequent updates.
+- Disable caching temporarily: `cache: false`.
 
 ### Network Timeouts
 
@@ -367,18 +450,16 @@ ansible-playbook -i unifi_inventory.yml site.yml
 
 **Causes:**
 - Controller URL is incorrect or unreachable from where Ansible is running.
-- Firewall is blocking HTTPS (port 443) access to the controller.
+- Firewall blocking HTTPS (port 443) access.
 
 **Solution:**
 - Verify controller URL.
-- Test connectivity: `curl -k https://192.168.1.1` (replace with your URL).
+- Test connectivity: `curl -k https://192.168.1.1`
 - Check firewall rules.
 
 ## Advanced Usage
 
 ### Filter by Last Seen Time
-
-Only include clients seen in the last 5 minutes:
 
 ```yaml
 plugin: aioue.network.unifi
@@ -389,8 +470,6 @@ last_seen_minutes: 5
 
 ### Include Infrastructure Devices
 
-Include APs, switches, and gateways in the inventory:
-
 ```yaml
 plugin: aioue.network.unifi
 url: "https://192.168.1.1"
@@ -398,22 +477,11 @@ token: "your-token"
 include_devices: true
 ```
 
-### Disable Caching
-
-For real-time inventory without caching (will be slower and cause more API load):
-
-```yaml
-plugin: aioue.network.unifi
-url: "https://192.168.1.1"
-token: "your-token"
-cache_ttl: 0
-```
-
 ### Multiple Sites
 
-For multi-site controllers, create separate inventory files for each site you want to query.
+Create separate inventory files per site:
 
-**`site_default.yml`:**
+**`site_default.unifi.yml`:**
 ```yaml
 plugin: aioue.network.unifi
 url: "https://192.168.1.1"
@@ -421,7 +489,7 @@ token: "your-token"
 site: "default"
 ```
 
-**`site_branch.yml`:**
+**`site_branch.unifi.yml`:**
 ```yaml
 plugin: aioue.network.unifi
 url: "https://192.168.1.1"
@@ -431,19 +499,27 @@ site: "branch-office"
 
 ## Performance Notes
 
-- **Caching is enabled by default** (`cache_ttl: 30` seconds) to reduce API calls.
-- The first run will be slower (2-10 seconds) as it fetches data from the API.
-- Subsequent runs within the TTL window will be very fast (< 100ms) as they read from the cache file.
+- Enable Ansible inventory caching to reduce UniFi API calls on repeated runs.
+- The first uncached run is slower (typically 2-10 seconds) while data is fetched from the API.
+- Cached runs within the `cache_timeout` window are much faster.
 
-## Upgrading from pre-collection versions
+## Upgrading
 
-If you were using the plugin directly (copying `unifi.py` to your plugins directory), 1.0.0 has breaking changes:
+### From 1.0.0
 
-1. **Install the collection:** `ansible-galaxy collection install git+https://github.com/aioue/ansible-unifi-inventory.git`
-2. **Update inventory files:** change `plugin: unifi` to `plugin: aioue.network.unifi`
-3. **Update ansible.cfg:** remove `unifi` from `enable_plugins` (the collection is auto-discovered). If you had `inventory_plugins = ./plugins/inventory`, that line can also be removed
-4. **Remove the old plugin file** from `~/.ansible/plugins/inventory/` or your custom path
-5. **Python 3.12+** is now required (was 3.11+)
+1. Upgrade: `ansible-galaxy collection install aioue.network --upgrade`
+2. Remove `cache_ttl` and `cache_path` from inventory files; configure Ansible inventory cache (see above)
+3. Optionally set `hostname: mac` for stable MAC-based host keys
+4. Optionally rename inventory files to `*.unifi.yml` for auto-detection
+
+### From pre-collection versions
+
+If you copied `unifi.py` into a local plugins directory:
+
+1. Install the collection: `ansible-galaxy collection install aioue.network`
+2. Update inventory files: `plugin: unifi` → `plugin: aioue.network.unifi`
+3. Remove custom `inventory_plugins` / `enable_plugins` entries for the old plugin
+4. Remove the old plugin file from `~/.ansible/plugins/inventory/` or your custom path
 
 ## Releasing a New Version
 
@@ -456,7 +532,7 @@ git tag v1.x.x
 git push origin v1.x.x
 ```
 
-The GitHub Actions workflow will build the collection, publish it to Ansible Galaxy, and create a GitHub Release automatically.
+The GitHub Actions workflow builds the collection, publishes to Ansible Galaxy, and creates a GitHub Release.
 
 ## Contributing
 

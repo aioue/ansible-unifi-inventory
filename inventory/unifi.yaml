@@ -1,5 +1,6 @@
 # UniFi Dynamic Inventory Configuration
-# This file uses the UniFi inventory plugin to dynamically discover hosts
+# This file uses the UniFi inventory plugin to dynamically discover hosts.
+# Name inventory files *.unifi.yml or *.unifi.yaml so Ansible auto-detects the plugin.
 
 # Plugin directive tells Ansible to use the UniFi inventory plugin
 plugin: aioue.network.unifi
@@ -39,13 +40,17 @@ include_devices: false
 # Useful to exclude stale/disconnected devices
 last_seen_minutes: 30
 
-# Cache TTL in seconds (default: 30)
-# How long to cache inventory results
-# Reduces API calls for frequent inventory queries
-# Set to 0 to disable caching
-cache_ttl: 30
+# Optional: use MAC-based hostnames when device names are missing or unstable
+# hostname: mac
 
-# Cache file path (default: ./.cache/unifi_inventory.json)
-# Location to store cached inventory JSON
-cache_path: "./.cache/unifi_inventory.json"
-
+# Create Ansible groups from host variables (Constructable inventory)
+# keyed_groups:
+#   - key: ssid
+#     prefix: ssid
+#     separator: "_"
+#   - key: vlan_name
+#     prefix: vlan
+#     separator: "_"
+#   - key: network
+#     prefix: network
+#     separator: "_"
