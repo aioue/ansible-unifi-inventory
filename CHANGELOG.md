@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.4 (2026-07-22)
+
+**Fixes:**
+
+- Install `community.library_inventory_filtering_v1` into the test collections path in CI/release workflows
+
 ## 1.1.3 (2026-07-22)
 
 **Improvements:**
@@ -10,7 +16,7 @@
 
 **Fixes:**
 
-- Extract login rate-limit detection into a testable helper used during authentication
+- Install filtering collection into the test collections path so unit tests do not depend on `~/.ansible/collections`
 
 **Tests:**
 
