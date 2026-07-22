@@ -521,7 +521,10 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
         for host_data in hosts:
             hostname = host_data["hostname"]
-            hostvars = host_data["hostvars"]
+            hostvars = {
+                key: _inventory_value(value)
+                for key, value in host_data["hostvars"].items()
+            }
             groups = host_data.get("groups", [])
 
             if not filter_host(self, hostname, hostvars, filters):
@@ -529,7 +532,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
             self.inventory.add_host(hostname)
             for key, value in hostvars.items():
-                self.inventory.set_variable(hostname, key, _inventory_value(value))
+                self.inventory.set_variable(hostname, key, value)
 
             self._set_composite_vars(
                 self.get_option("compose"), hostvars, hostname, strict=strict
@@ -598,6 +601,12 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                         "for automation, or use token authentication."
                     )
                 except (ResponseError, AiounifiException) as e:
+                    err = str(e)
+                    if "429" in err or "AUTHENTICATION_FAILED_LIMIT_REACHED" in err:
+                        raise AnsibleError(
+                            "UniFi login rate limit reached. Wait before retrying, use "
+                            "token authentication, or increase inventory cache_timeout."
+                        )
                     raise AnsibleError(f"Controller error during login: {e}")
 
             try:

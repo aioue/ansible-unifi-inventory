@@ -38,4 +38,6 @@ tests/_ansible_collections/
 dist/
 build/
 *.egg-info/
+*.tar.gz
+ansible_collections/
 

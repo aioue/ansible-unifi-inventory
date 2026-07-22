@@ -5,6 +5,8 @@
 **Fixes:**
 
 - Serialize UniFi device enums (e.g. `DeviceState`) for Ansible inventory host variables when `include_devices: true`
+- Sanitize all host variables before compose/keyed_groups processing
+- Surface clearer errors when UniFi login rate limits are hit (429 / `AUTHENTICATION_FAILED_LIMIT_REACHED`)
 
 **Documentation:**
 
