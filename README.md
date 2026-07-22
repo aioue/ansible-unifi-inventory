@@ -1,5 +1,10 @@
 # aioue.network
 
+[![CI](https://github.com/aioue/ansible-unifi-inventory/actions/workflows/ci.yml/badge.svg)](https://github.com/aioue/ansible-unifi-inventory/actions/workflows/ci.yml)
+[![Galaxy](https://img.shields.io/ansible/collection/v/aioue/network)](https://galaxy.ansible.com/ui/repo/published/aioue/network/)
+[![Release](https://img.shields.io/github/v/release/aioue/ansible-unifi-inventory)](https://github.com/aioue/ansible-unifi-inventory/releases)
+[![License](https://img.shields.io/github/license/aioue/ansible-unifi-inventory)](LICENSE)
+
 Dynamic inventory plugin for Ansible that discovers hosts from a UniFi OS controller (UDM, UCG, etc.). Built on top of [aiounifi](https://github.com/Kane610/aiounifi).
 
 ```shell
