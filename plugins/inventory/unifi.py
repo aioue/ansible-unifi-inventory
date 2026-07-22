@@ -236,13 +236,17 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
         self._read_config_data(path)
 
-        if not self.get_option("url"):
+        # Apply Jinja2 templating to connection options so vault lookups in
+        # inventory files (e.g. secrets.yml) resolve before authentication.
+        self.url = self._template_option("url")
+        self.username = self._template_option("username") or ""
+        self.password = self._template_option("password") or ""
+        self.token = self._template_option("token") or ""
+
+        if not self.url:
             raise AnsibleError("UniFi controller URL is required")
 
-        token = self.get_option("token") or ""
-        username = self.get_option("username") or ""
-        password = self.get_option("password") or ""
-        if not token and not (username and password):
+        if not self.token and not (self.username and self.password):
             raise AnsibleError(
                 "Authentication required: provide token or username+password"
             )
@@ -264,6 +268,15 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 self._cache[cache_key] = results
 
         self._populate_inventory(results)
+
+    def _template_option(self, option_name: str) -> Optional[str]:
+        """Return an inventory option value, resolving Jinja2 templates if present."""
+        value = self.get_option(option_name)
+        if value is None:
+            return None
+        if self.templar.is_template(value):
+            return self.templar.template(value)
+        return value
 
     def _run_async(self, coro):
         """Run a coroutine in a dedicated thread with its own event loop."""
@@ -503,7 +516,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         """Fetch inventory from UniFi controller."""
         hosts: List[Dict[str, Any]] = []
 
-        url = self.get_option("url")
+        url = self.url
         verify_ssl = self.get_option("verify_ssl")
         ssl_context = False if not verify_ssl else True
 
@@ -513,7 +526,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         session = aiohttp.ClientSession(connector=connector)
 
         try:
-            token = self.get_option("token") or ""
+            token = self.token
             if token:
                 from http.cookies import SimpleCookie
 
@@ -532,8 +545,8 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             config = Configuration(
                 session=session,
                 host=host,
-                username=self.get_option("username") or "",
-                password=self.get_option("password") or "",
+                username=self.username,
+                password=self.password,
                 port=port,
                 site=self.get_option("site"),
                 ssl_context=ssl_context,

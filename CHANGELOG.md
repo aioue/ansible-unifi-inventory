@@ -17,6 +17,7 @@
 - Pinned `aiounifi>=82.0.0` in `requirements.txt`
 - Async controller fetch runs in a dedicated thread to avoid event-loop conflicts
 - Avoids private `aiounifi` handler APIs where possible
+- Connection options (`url`, `username`, `password`, `token`) support Jinja2 templating for vault lookups and variables in inventory files
 - Added light unit tests and CI workflow (pytest)
 
 ## 1.0.0 (2026-03-22)

@@ -112,6 +112,10 @@ username: "ansible-admin"
 password: "your-password"
 # ---------------------
 
+# Templated credentials (e.g. Ansible Vault lookups) are also supported:
+# username: "{{ lookup('ansible.builtin.unvault', 'secrets.yml') | from_yaml | json_query('unifi_username') }}"
+# password: "{{ lookup('ansible.builtin.unvault', 'secrets.yml') | from_yaml | json_query('unifi_password') }}"
+
 site: "default"
 verify_ssl: false
 include_devices: false
@@ -283,6 +287,8 @@ You must use a **local admin account** (not a ui.com SSO account) and **2FA must
 5. Use these credentials for `username`/`password` or `UNIFI_USERNAME`/`UNIFI_PASSWORD`.
 
 **Note:** If both token and username/password are provided, the **token takes precedence**.
+
+Connection options (`url`, `username`, `password`, `token`) support Jinja2 templating, so you can reference Ansible Vault lookups or variables directly in the inventory file.
 
 ## Inventory Schema
 

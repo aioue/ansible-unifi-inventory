@@ -46,6 +46,24 @@ def test_mac_to_hostname() -> None:
     assert mac_to_hostname("AA:BB:CC:DD:EE:FF") == "aa-bb-cc-dd-ee-ff"
 
 
+def test_template_option_resolves_jinja() -> None:
+    plugin = InventoryModule()
+    plugin.templar = SimpleNamespace(
+        is_template=lambda value: "{{" in value,
+        template=lambda value: "resolved-secret" if "password" in value else value,
+    )
+
+    with patch.object(plugin, "get_option", return_value="{{ vault_password }}"):
+        assert plugin._template_option("password") == "resolved-secret"
+
+
+def test_template_option_returns_plain_value() -> None:
+    plugin = InventoryModule()
+
+    with patch.object(plugin, "get_option", return_value="plain-password"):
+        assert plugin._template_option("password") == "plain-password"
+
+
 @pytest.mark.parametrize(
     ("mode", "client_attrs", "expected_hostname", "expected_unifi_name"),
     [
