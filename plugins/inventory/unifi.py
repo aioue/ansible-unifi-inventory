@@ -50,6 +50,13 @@ DOCUMENTATION = r"""
             type: str
             env:
                 - name: UNIFI_TOKEN
+        totp_secret:
+            description:
+                - TOTP shared secret for automated 2FA login (local or SSO accounts).
+                - Requires aiounifi with C(totp_secret) support (see aiounifi PR #990); when unset, 2FA accounts must use token auth or a non-2FA local admin.
+            type: str
+            env:
+                - name: UNIFI_TOTP_SECRET
         site:
             description: UniFi site name
             type: str
@@ -136,6 +143,7 @@ keyed_groups:
 import asyncio
 import concurrent.futures
 import enum
+import inspect
 import logging
 import re
 import time
@@ -197,6 +205,55 @@ def _inventory_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _inventory_value(item) for key, item in value.items()}
     return str(value)
+
+
+def _login_rate_limit_message(error: Exception) -> Optional[str]:
+    """Return a user-facing message when UniFi throttles authentication."""
+    err = str(error)
+    if "429" in err or "AUTHENTICATION_FAILED_LIMIT_REACHED" in err:
+        return (
+            "UniFi login rate limit reached. Wait before retrying, use token "
+            "authentication, or increase inventory cache_timeout."
+        )
+    return None
+
+
+def _build_poe_ports(device: Any) -> List[Dict[str, Any]]:
+    """Summarize PoE-capable switch ports from a UniFi device."""
+    port_table = getattr(device, "port_table", None) or []
+    ports: List[Dict[str, Any]] = []
+
+    for port in port_table:
+        if not isinstance(port, dict):
+            continue
+        if not port.get("port_poe") and not port.get("poe_enable"):
+            continue
+        ports.append(
+            {
+                "port_idx": port.get("port_idx"),
+                "name": port.get("name"),
+                "up": port.get("up"),
+                "poe_enable": port.get("poe_enable"),
+                "poe_mode": port.get("poe_mode"),
+                "poe_power": port.get("poe_power"),
+                "poe_voltage": port.get("poe_voltage"),
+                "poe_good": port.get("poe_good"),
+                "is_uplink": port.get("is_uplink"),
+            }
+        )
+
+    return _inventory_value(ports)
+
+
+def _set_optional_hostvar(
+    hostvars: Dict[str, Any], key: str, value: Any
+) -> None:
+    """Set a host variable when the source value is present."""
+    if value is None:
+        return
+    if isinstance(value, str) and not value:
+        return
+    hostvars[key] = _inventory_value(value)
 
 
 def _iter_handler_items(handler: Any) -> Iterable[Tuple[str, Any]]:
@@ -274,6 +331,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         self.username = self._template_option("username") or ""
         self.password = self._template_option("password") or ""
         self.token = self._template_option("token") or ""
+        self.totp_secret = self._template_option("totp_secret") or ""
 
         if not self.url:
             raise AnsibleError("UniFi controller URL is required")
@@ -459,6 +517,15 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         if oui:
             hostvars["oui"] = oui
 
+        if getattr(client, "is_guest", False):
+            hostvars["is_guest"] = True
+        if getattr(client, "blocked", False):
+            hostvars["blocked"] = True
+
+        firmware_version = getattr(client, "firmware_version", None)
+        if firmware_version:
+            hostvars["firmware_version"] = firmware_version
+
         groups = ["unifi_clients"]
         if is_wired:
             groups.append("unifi_wired_clients")
@@ -491,8 +558,6 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         dev_type = _inventory_value(getattr(device, "type", "unknown"))
         model = _inventory_value(getattr(device, "model", "unknown"))
         firmware = _inventory_value(getattr(device, "version", "unknown"))
-        adopted = _inventory_value(getattr(device, "adopted", False))
-        state = _inventory_value(getattr(device, "state", None))
 
         hostvars = {
             "ansible_host": ip,
@@ -502,10 +567,37 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             "type": dev_type,
             "firmware_version": firmware,
             "site": self.get_option("site"),
-            "adopted": adopted,
         }
-        if state is not None:
-            hostvars["state"] = state
+
+        _set_optional_hostvar(hostvars, "device_id", getattr(device, "id", None))
+        _set_optional_hostvar(hostvars, "state", getattr(device, "state", None))
+        _set_optional_hostvar(hostvars, "adopted", getattr(device, "adopted", None))
+        _set_optional_hostvar(hostvars, "upgradable", getattr(device, "upgradable", None))
+        _set_optional_hostvar(
+            hostvars, "upgrade_to_firmware", getattr(device, "upgrade_to_firmware", None)
+        )
+        _set_optional_hostvar(hostvars, "overheating", getattr(device, "overheating", None))
+        _set_optional_hostvar(hostvars, "disabled", getattr(device, "disabled", None))
+        _set_optional_hostvar(hostvars, "uptime", getattr(device, "uptime", None))
+        _set_optional_hostvar(
+            hostvars, "uplink_depth", getattr(device, "uplink_depth", None)
+        )
+        _set_optional_hostvar(
+            hostvars, "client_count", getattr(device, "user_num_sta", None)
+        )
+        _set_optional_hostvar(hostvars, "uplink", getattr(device, "uplink", None))
+
+        try:
+            cpu, mem, uptime = device.system_stats
+            _set_optional_hostvar(hostvars, "cpu_percent", cpu)
+            _set_optional_hostvar(hostvars, "mem_percent", mem)
+            _set_optional_hostvar(hostvars, "system_uptime", uptime)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            pass
+
+        poe_ports = _build_poe_ports(device)
+        if poe_ports:
+            hostvars["poe_ports"] = poe_ports
 
         if unifi_name is not None:
             hostvars["unifi_name"] = unifi_name
@@ -578,15 +670,21 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             host = parsed.hostname or parsed.path
             port = parsed.port or 443
 
-            config = Configuration(
-                session=session,
-                host=host,
-                username=self.username,
-                password=self.password,
-                port=port,
-                site=self.get_option("site"),
-                ssl_context=ssl_context,
-            )
+            config_kwargs = {
+                "session": session,
+                "host": host,
+                "username": self.username,
+                "password": self.password,
+                "port": port,
+                "site": self.get_option("site"),
+                "ssl_context": ssl_context,
+            }
+            if self.totp_secret and "totp_secret" in inspect.signature(
+                Configuration
+            ).parameters:
+                config_kwargs["totp_secret"] = self.totp_secret
+
+            config = Configuration(**config_kwargs)
 
             controller = Controller(config)
 
@@ -596,17 +694,22 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 except LoginRequired:
                     raise AnsibleError("Authentication failed: check credentials")
                 except TwoFaTokenRequired:
+                    if self.totp_secret and "totp_secret" not in inspect.signature(
+                        Configuration
+                    ).parameters:
+                        raise AnsibleError(
+                            "2FA is required but installed aiounifi does not support "
+                            "totp_secret yet. Upgrade aiounifi, use token authentication, "
+                            "or use a local admin without 2FA."
+                        )
                     raise AnsibleError(
-                        "2FA is required. Please create a local admin account without 2FA "
-                        "for automation, or use token authentication."
+                        "2FA is required. Set totp_secret (vault-friendly TOTP seed), use "
+                        "token authentication, or create a local admin without 2FA."
                     )
                 except (ResponseError, AiounifiException) as e:
-                    err = str(e)
-                    if "429" in err or "AUTHENTICATION_FAILED_LIMIT_REACHED" in err:
-                        raise AnsibleError(
-                            "UniFi login rate limit reached. Wait before retrying, use "
-                            "token authentication, or increase inventory cache_timeout."
-                        )
+                    rate_limit_message = _login_rate_limit_message(e)
+                    if rate_limit_message:
+                        raise AnsibleError(rate_limit_message)
                     raise AnsibleError(f"Controller error during login: {e}")
 
             try:

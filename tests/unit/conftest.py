@@ -19,22 +19,16 @@ def _add_collections_path(path: Path) -> None:
 
 def _ensure_collection_path() -> None:
     TARGET.parent.mkdir(parents=True, exist_ok=True)
+    if TARGET.exists() and not TARGET.is_symlink():
+        raise RuntimeError(f"Expected symlink at {TARGET}, found a real directory")
     if not TARGET.exists():
         TARGET.symlink_to(COLLECTION_ROOT, target_is_directory=True)
 
-    paths = [
-        FAKE_COLLECTIONS,
-        Path.home() / ".ansible" / "collections",
-    ]
-
-    env_paths = []
-    for path in paths:
-        _add_collections_path(path)
-        env_paths.append(str(path))
-
-    existing = os.environ.get("ANSIBLE_COLLECTIONS_PATH", "")
-    merged = os.pathsep.join(env_paths + ([existing] if existing else []))
-    os.environ["ANSIBLE_COLLECTIONS_PATH"] = merged
+    # Only expose the workspace collection. Do not add ~/.ansible/collections to
+    # sys.path: ansible_collections is a namespace package and the installed
+    # release would shadow local plugin changes during development.
+    _add_collections_path(FAKE_COLLECTIONS)
+    os.environ["ANSIBLE_COLLECTIONS_PATH"] = str(FAKE_COLLECTIONS)
 
 
 _ensure_collection_path()

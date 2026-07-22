@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.3 (2026-07-22)
+
+**Improvements:**
+
+- Expose additional device host variables from aiounifi: `device_id`, `upgradable`, `overheating`, `uptime`, `uplink`, `client_count`, system stats, and `poe_ports` (per-port PoE state on switches)
+- Expose client `is_guest`, `blocked`, and `firmware_version` when reported by UniFi
+- Add optional `totp_secret` inventory option (forward-compatible with [aiounifi PR #990](https://github.com/Kane610/aiounifi/pull/990) automated 2FA login)
+
+**Fixes:**
+
+- Extract login rate-limit detection into a testable helper used during authentication
+
+**Tests:**
+
+- Refresh README inventory examples from a live run (graph, PoE ports, device stats)
+
 ## 1.1.2 (2026-07-22)
 
 **Fixes:**

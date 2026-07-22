@@ -12,46 +12,53 @@ $ ansible-inventory -i inventory/unifi.yaml all --graph
 @all:
   |--@ungrouped:
   |--@unifi_clients:
-  |  |--phone
-  |  |--laptop
   |  |--Kitchen_Echo
   |  |--nas-server
-  |  |--Living_Room_Chromecast
+  |  |--Study_Proxmox
+  |  |--phone
+  |  |--homeassistant
+  |  |--Study_Mac_Mini_Ethernet
   |--@unifi_wireless_clients:
-  |  |--phone
   |  |--Kitchen_Echo
-  |  |--Living_Room_Chromecast
+  |  |--phone
   |--@unifi_wired_clients:
-  |  |--laptop
   |  |--nas-server
+  |  |--Study_Proxmox
+  |  |--homeassistant
+  |  |--Study_Mac_Mini_Ethernet
   |--@network_default:
-  |  |--laptop
   |  |--nas-server
+  |  |--Study_Proxmox
+  |  |--homeassistant
+  |  |--Study_Mac_Mini_Ethernet
+  |  |--phone
   |--@network_iot:
   |  |--Kitchen_Echo
-  |  |--Living_Room_Chromecast
   |--@vlan_30:
   |  |--Kitchen_Echo
   |--@vlan_iot:
   |  |--Kitchen_Echo
   |--@ssid_home_iot:
   |  |--Kitchen_Echo
-  |  |--Living_Room_Chromecast
   |--@ssid_home_wifi:
   |  |--phone
   |--@unifi_devices:
   |  |--U6_Pro
+  |  |--U6_Mesh
   |  |--USW_Flex
+  |  |--USW_Ultra
   |  |--Dream_Machine
   |--@unifi_uap:
   |  |--U6_Pro
+  |  |--U6_Mesh
   |--@unifi_usw:
   |  |--USW_Flex
+  |  |--USW_Ultra
   |--@unifi_udm:
   |  |--Dream_Machine
 ```
 
-Example host variables (`include_devices: true` in the inventory file):
+Example host variables (`include_devices: true` in the inventory file; output sanitized from a live run):
 
 ```shell
 $ ansible-inventory -i inventory/unifi.yaml --host Kitchen_Echo
@@ -65,7 +72,7 @@ $ ansible-inventory -i inventory/unifi.yaml --host Kitchen_Echo
   "vlan_name": "IoT",
   "network": "IoT",
   "oui": "Amazon Technologies Inc.",
-  "last_seen_iso": "2026-07-22T18:10:14Z",
+  "last_seen_iso": "2026-07-22T18:17:02Z",
   "unifi_name": "Kitchen Echo"
 }
 
@@ -77,7 +84,7 @@ $ ansible-inventory -i inventory/unifi.yaml --host nas-server
   "is_wired": true,
   "network": "Default",
   "oui": "Example Vendor Inc.",
-  "last_seen_iso": "2026-07-22T18:09:59Z",
+  "last_seen_iso": "2026-07-22T18:17:14Z",
   "unifi_name": "nas-server"
 }
 
@@ -89,9 +96,62 @@ $ ansible-inventory -i inventory/unifi.yaml --host U6_Pro
   "model": "UAP6MP",
   "type": "uap",
   "firmware_version": "6.8.2.15592",
-  "adopted": true,
+  "device_id": "671113bfba911339bf2be6c8",
   "state": "CONNECTED",
+  "upgradable": false,
+  "overheating": false,
+  "uptime": 4767038,
+  "client_count": 7,
+  "cpu_percent": "7.7",
+  "mem_percent": "65.6",
+  "system_uptime": "4767038",
+  "uplink": {
+    "type": "wire",
+    "up": true,
+    "speed": 1000,
+    "uplink_mac": "28:70:4e:6d:f9:32",
+    "uplink_device_name": "USW Ultra"
+  },
   "unifi_name": "U6 Pro"
+}
+
+$ ansible-inventory -i inventory/unifi.yaml --host USW_Flex
+{
+  "ansible_host": "192.168.1.231",
+  "ip": "192.168.1.231",
+  "mac": "94:2a:6f:fe:0e:e5",
+  "type": "usw",
+  "model": "USWED37",
+  "firmware_version": "2.1.8.971",
+  "state": "CONNECTED",
+  "client_count": 5,
+  "cpu_percent": "11.0",
+  "mem_percent": "82.8",
+  "poe_ports": [
+    {
+      "port_idx": 6,
+      "name": "Port 6",
+      "up": true,
+      "poe_enable": true,
+      "poe_mode": "auto",
+      "poe_power": "6.00",
+      "poe_voltage": "47.24",
+      "poe_good": true,
+      "is_uplink": false
+    },
+    {
+      "port_idx": 7,
+      "name": "Port 7",
+      "up": true,
+      "poe_enable": true,
+      "poe_mode": "auto",
+      "poe_power": "13.50",
+      "poe_voltage": "47.05",
+      "poe_good": true,
+      "is_uplink": false
+    }
+  ],
+  "unifi_name": "USW Flex 2.5G 8 PoE"
 }
 ```
 
@@ -112,7 +172,7 @@ $ ansible-inventory -i inventory/unifi.yaml --host U6_Pro
 - **Python 3.12+** (newer `aiounifi` releases may require 3.13+; check `pip install` output)
 - **Ansible 2.15+**
 - **UniFi OS controller** accessible via network (UDM, UCG, etc.).
-- **API credentials**: A dedicated local admin user/password (2FA not supported) or an API token.
+- **API credentials**: API token (preferred), local admin without 2FA, or username/password with `totp_secret` when using a 2FA-enabled account (requires a recent aiounifi release with [PR #990](https://github.com/Kane610/aiounifi/pull/990) support).
 - **Python dependencies**: Install in the same Python environment as Ansible:
   ```bash
   pip install -r requirements.txt
@@ -342,7 +402,19 @@ Two authentication methods are supported.
 
 ### Username/Password
 
-You must use a **local admin account** (not a ui.com SSO account) and **2FA must be disabled** for this account.
+For password login you have three options:
+
+1. **API token** (see above) - no login call, avoids rate limits.
+2. **Local admin without 2FA** - simplest password flow for automation.
+3. **`totp_secret`** - TOTP seed for accounts with 2FA enabled (local or SSO). Requires aiounifi with [automated 2FA login](https://github.com/Kane610/aiounifi/pull/990) (`Configuration.totp_secret`). Vault-friendly:
+
+```yaml
+username: "{{ vault_unifi_username }}"
+password: "{{ vault_unifi_password }}"
+totp_secret: "{{ vault_unifi_totp_secret }}"
+```
+
+For option 2, create a **local admin account** (not a ui.com SSO account) with 2FA disabled:
 
 1. Go to `UniFi OS Settings > Admins & Users`.
 2. Create a new user with the "Admin" role.
@@ -352,7 +424,7 @@ You must use a **local admin account** (not a ui.com SSO account) and **2FA must
 
 **Note:** If both token and username/password are provided, the **token takes precedence**.
 
-Connection options (`url`, `username`, `password`, `token`) support Jinja2 templating, so you can reference Ansible Vault lookups or variables directly in the inventory file.
+Connection options (`url`, `username`, `password`, `token`, `totp_secret`) support Jinja2 templating, so you can reference Ansible Vault lookups or variables directly in the inventory file.
 
 ## Inventory Schema
 
@@ -398,6 +470,9 @@ Each client host includes:
 - `network` - Network name (if available)
 - `network_id` - Network ID (if available)
 - `oui` - Device manufacturer OUI (if available)
+- `is_guest` - boolean, true for guest network clients
+- `blocked` - boolean, true when blocked in UniFi
+- `firmware_version` - Client firmware version (when reported by UniFi)
 
 ### Host Variables (Devices)
 
@@ -406,11 +481,22 @@ Each device host includes:
 - `mac` - MAC address
 - `ip` - IP address
 - `model` - Device model
-- `type` - Device type (uap, usw, ugw, etc.)
+- `type` - Device type (uap, usw, ugw, udm, etc.)
 - `firmware_version` - Current firmware version
 - `site` - UniFi site name
+- `device_id` - UniFi device ID
+- `state` - Device state (e.g. `CONNECTED`)
 - `adopted` - boolean, adoption status
-- `state` - Device state
+- `upgradable` - boolean, firmware update available
+- `upgrade_to_firmware` - Target firmware when upgradable
+- `overheating` - boolean, thermal warning state
+- `disabled` - boolean, administratively disabled
+- `uptime` - Device uptime in seconds
+- `uplink_depth` - Hops to gateway
+- `client_count` - Connected client count (`user_num_sta`)
+- `uplink` - Uplink details (type, remote MAC, etc.)
+- `cpu_percent` / `mem_percent` / `system_uptime` - From `system-stats`
+- `poe_ports` - List of PoE-capable switch ports with power state (switches only)
 
 ## Configuration Options Reference
 
@@ -420,6 +506,7 @@ Each device host includes:
 | Username | `UNIFI_USERNAME` | `username` | "" |
 | Password | `UNIFI_PASSWORD` | `password` | "" |
 | API Token | `UNIFI_TOKEN` | `token` | "" |
+| TOTP Secret | `UNIFI_TOTP_SECRET` | `totp_secret` | "" |
 | Site Name | `UNIFI_SITE` | `site` | `default` |
 | Verify SSL | `UNIFI_VERIFY_SSL` | `verify_ssl` | `true` |
 | Include Devices | `UNIFI_INCLUDE_DEVICES` | `include_devices` | `false` |
@@ -475,12 +562,14 @@ ansible-playbook -i prod.unifi.yml site.yml
 **Causes:**
 - Incorrect username/password or token.
 - Token expired or revoked.
-- **Two-Factor Authentication (2FA) is enabled on the account.** This plugin does not support 2FA.
-- Using a ui.com SSO account instead of a local admin account.
+- **Two-Factor Authentication (2FA)** on a password account without `totp_secret` configured.
+- Installed aiounifi is too old for `totp_secret` (upgrade after [PR #990](https://github.com/Kane610/aiounifi/pull/990) is released).
+- Using a ui.com SSO account without token or `totp_secret`.
 
 **Solution:**
 - Verify credentials.
-- **You MUST use a local admin account with 2FA disabled.** See the "Authentication" section.
+- Prefer **token authentication** for automation (avoids login rate limits).
+- For 2FA accounts, set `totp_secret` once aiounifi supports it, or use a local admin without 2FA.
 - Regenerate your API token.
 
 ### No Hosts Returned
