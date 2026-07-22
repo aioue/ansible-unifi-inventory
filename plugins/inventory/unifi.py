@@ -19,7 +19,7 @@ DOCUMENTATION = r"""
     short_description: UniFi dynamic inventory plugin
     description:
         - Discovers UniFi clients and optionally devices from a UniFi OS controller
-        - Supports both token-based and username/password authentication
+        - Supports API token, username/password, and password with totp_secret (2FA / SSO)
         - Groups hosts by connection type (wired/wireless), SSID, VLAN, and device type
     extends_documentation_fragment:
         - ansible.builtin.constructed
@@ -114,7 +114,7 @@ DOCUMENTATION = r"""
 """
 
 EXAMPLES = r"""
-# Example inventory file: inventory/unifi.yaml
+# Method B: local admin password (no 2FA)
 plugin: aioue.network.unifi
 url: https://192.168.1.1
 username: admin
@@ -126,10 +126,20 @@ last_seen_minutes: 30
 cache: true
 cache_timeout: 30
 
-# Example with token authentication
+# Method A: API token (preferred; token takes precedence if both are set)
 plugin: aioue.network.unifi
 url: https://192.168.1.1
 token: your-api-token-here
+verify_ssl: false
+cache: true
+cache_timeout: 30
+
+# Method C: password + TOTP (2FA or ui.com SSO; aiounifi v91+, pyotp)
+plugin: aioue.network.unifi
+url: https://192.168.1.1
+username: your-account
+password: secret
+totp_secret: BASE32-TOTP-SEED
 verify_ssl: false
 
 # Optional: use MAC-based hostnames for stability when device names change

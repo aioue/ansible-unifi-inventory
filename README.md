@@ -357,21 +357,26 @@ plugin: aioue.network.unifi
 # UniFi controller URL (required)
 url: "https://192.168.1.1"
 
-# --- Authentication ---
-# Provide EITHER token OR username/password
+# --- Authentication (pick one method; see "Authentication" below) ---
+# If token is non-empty, username/password/totp_secret are ignored.
 
-# API Token (Preferred method)
+# Method A: API token (preferred for automation)
 token: "your-api-token-here"
 
-# Username/Password (Alternative)
-# Must be a LOCAL admin account without 2FA
-username: "ansible-admin"
-password: "your-password"
-# ---------------------
+# Method B: Local admin password (no 2FA)
+# username: "ansible-admin"
+# password: "your-password"
+
+# Method C: Password + TOTP (2FA or ui.com SSO; aiounifi v91+, pyotp)
+# username: "your-account"
+# password: "your-password"
+# totp_secret: "BASE32-TOTP-SEED"  # setup seed, not the 6-digit code
 
 # Templated credentials (e.g. Ansible Vault lookups) are also supported:
+# token: "{{ lookup('ansible.builtin.unvault', 'secrets.yml') | from_yaml | json_query('unifi_token') }}"
 # username: "{{ lookup('ansible.builtin.unvault', 'secrets.yml') | from_yaml | json_query('unifi_username') }}"
 # password: "{{ lookup('ansible.builtin.unvault', 'secrets.yml') | from_yaml | json_query('unifi_password') }}"
+# totp_secret: "{{ lookup('ansible.builtin.unvault', 'secrets.yml') | from_yaml | json_query('unifi_totp_secret') }}"
 
 site: "default"
 verify_ssl: false
@@ -470,13 +475,20 @@ See [Ansible inventory cache documentation](https://docs.ansible.com/ansible/lat
 
 ### Environment Variables
 
-You can also provide configuration via environment variables, which override settings in the YAML file.
+You can also provide configuration via environment variables, which override settings in the YAML file. Handy for CI/CD when you do not want credentials in the inventory file.
 
 ```bash
 export UNIFI_URL=https://192.168.1.1
-export UNIFI_TOKEN=your-api-token-here
 export UNIFI_SITE=default
 export UNIFI_VERIFY_SSL=false
+
+# Method A: token (preferred)
+export UNIFI_TOKEN=your-api-token-here
+
+# Method B or C: password login (add UNIFI_TOTP_SECRET for 2FA / SSO)
+# export UNIFI_USERNAME=ansible-admin
+# export UNIFI_PASSWORD=your-password
+# export UNIFI_TOTP_SECRET=BASE32-TOTP-SEED
 ```
 
 ## Usage
@@ -524,30 +536,30 @@ ansible-playbook -i static_hosts.yml -i prod.unifi.yml site.yml
 
 ## Authentication
 
-Two authentication methods are supported.
+Pick **one** method below. If `token` is non-empty, `username`, `password`, and `totp_secret` are ignored.
+
+| Method | When to use | Inventory keys | Notes |
+|--------|-------------|----------------|-------|
+| API token | Automation (recommended) | `token` | No login call; avoids controller rate limits |
+| Local password | Simple homelab setup | `username`, `password` | Local admin account with 2FA disabled |
+| Password + TOTP | ui.com SSO or 2FA-enabled account | `username`, `password`, `totp_secret` | aiounifi v91+ and `pyotp` required |
+
+Connection options (`url`, `username`, `password`, `token`, `totp_secret`) support Jinja2 templating, so you can reference Ansible Vault lookups or variables directly in the inventory file.
 
 ### API Token (Preferred)
 
-1. Log in to your UniFi controller as a **local** admin user.
+The `token` value is the Network API token from your controller. The plugin passes it as the `unifises` session cookie (no username/password login).
+
+1. Log in to your UniFi controller.
 2. Go to `Settings > Network > Control Plane > Integrations > Network API` (or similar path).
 3. Create a new token.
 4. Use this token for the `token` config option or the `UNIFI_TOKEN` environment variable.
 
-### Username/Password
+Works with local and ui.com admin accounts. Tokens can be revoked without changing account passwords.
 
-For password login you have three options:
+### Local Admin Password
 
-1. **API token** (see above) - no login call, avoids rate limits.
-2. **Local admin without 2FA** - simplest password flow for automation.
-3. **`totp_secret`** - TOTP seed for accounts with 2FA enabled (local or SSO). Requires aiounifi v91+ (`Configuration.totp_secret`, `pyotp`). Vault-friendly:
-
-```yaml
-username: "{{ vault_unifi_username }}"
-password: "{{ vault_unifi_password }}"
-totp_secret: "{{ vault_unifi_totp_secret }}"
-```
-
-For option 2, create a **local admin account** (not a ui.com SSO account) with 2FA disabled:
+For password login without 2FA, create a **local admin account** (not a ui.com SSO account):
 
 1. Go to `UniFi OS Settings > Admins & Users`.
 2. Create a new user with the "Admin" role.
@@ -555,9 +567,19 @@ For option 2, create a **local admin account** (not a ui.com SSO account) with 2
 4. Do **NOT** enable 2FA for this account.
 5. Use these credentials for `username`/`password` or `UNIFI_USERNAME`/`UNIFI_PASSWORD`.
 
-**Note:** If both token and username/password are provided, the **token takes precedence**.
+Password login calls the controller login endpoint on every uncached inventory refresh. Enable inventory caching (`cache: true`, `cache_timeout`) or switch to a token if you hit rate limits.
 
-Connection options (`url`, `username`, `password`, `token`, `totp_secret`) support Jinja2 templating, so you can reference Ansible Vault lookups or variables directly in the inventory file.
+### Password with TOTP (2FA / SSO)
+
+For accounts with 2FA enabled (local or ui.com SSO), set `totp_secret` to the **TOTP shared secret** from authenticator setup - the base32 seed string, not the rotating 6-digit code. Requires aiounifi v91+ (`Configuration.totp_secret`) and `pyotp`.
+
+```yaml
+username: "{{ vault_unifi_username }}"
+password: "{{ vault_unifi_password }}"
+totp_secret: "{{ vault_unifi_totp_secret }}"
+```
+
+ui.com SSO accounts cannot use password-only login; use an API token or password with `totp_secret`.
 
 ## Inventory Schema
 
@@ -680,7 +702,7 @@ ansible-playbook -i prod.unifi.yml site.yml --ask-vault-pass
 
 ### Use Environment Variables
 
-For CI/CD pipelines, use environment variables to inject secrets.
+For CI/CD pipelines, use environment variables to inject secrets (see [Environment Variables](#environment-variables) above).
 
 ```bash
 export UNIFI_URL=https://192.168.1.1
@@ -688,10 +710,7 @@ export UNIFI_TOKEN=$VAULT_UNIFI_TOKEN
 ansible-playbook -i prod.unifi.yml site.yml
 ```
 
-### Token vs Password
-
-- Prefer **API tokens** over username/password.
-- Tokens can be revoked without changing account credentials.
+Prefer **API tokens** over username/password for automation. Tokens skip the login endpoint and can be revoked without changing account credentials.
 
 ## Troubleshooting
 
@@ -717,8 +736,10 @@ ansible-playbook -i prod.unifi.yml site.yml
 **Solution:**
 - Verify credentials.
 - Prefer **token authentication** for automation (avoids login rate limits).
-- For 2FA accounts, set `totp_secret` once aiounifi supports it, or use a local admin without 2FA.
-- Regenerate your API token.
+- For 2FA or ui.com SSO accounts, set `totp_secret` (base32 seed, not the 6-digit code) or use an API token.
+- For password-only automation, use a local admin without 2FA.
+- Upgrade aiounifi to v91+ if `totp_secret` or rate-limit errors are missing.
+- Regenerate your API token if it was revoked.
 
 ### No Hosts Returned
 
