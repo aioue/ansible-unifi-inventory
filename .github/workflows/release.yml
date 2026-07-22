@@ -46,7 +46,7 @@ jobs:
       - name: Run ansible-test sanity
         working-directory: ansible_collections/aioue/network
         env:
-          ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}/ansible_collections
+          ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}
         run: ansible-test sanity --local --color no
 
       - name: Build collection
