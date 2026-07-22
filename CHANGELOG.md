@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.6 (2026-07-22)
+
+**Fixes:**
+
+- Serialize aiounifi v92 `StrEnum` values (e.g. `DeviceType`) before Ansible inventory storage
+- Map aiounifi `AuthenticationRateLimitError` when available (v91+)
+
+**Dependencies:**
+
+- Require aiounifi v91+ and `pyotp` (SSO 2FA and rate-limit support; tested with v92)
+
+**Documentation:**
+
+- Refresh README inventory examples from a live run with aiounifi v92
+
 ## 1.1.5 (2026-07-22)
 
 **Improvements (closes parts of #4):**

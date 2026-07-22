@@ -53,7 +53,7 @@ DOCUMENTATION = r"""
         totp_secret:
             description:
                 - TOTP shared secret for automated 2FA login (local or SSO accounts).
-                - Requires aiounifi with C(totp_secret) support (see aiounifi PR #990); when unset, 2FA accounts must use token auth or a non-2FA local admin.
+                - Requires aiounifi v91+ (C(totp_secret) on C(Configuration)); adds C(pyotp) dependency
             type: str
             env:
                 - name: UNIFI_TOTP_SECRET
@@ -156,6 +156,8 @@ from ansible_collections.community.library_inventory_filtering_v1.plugins.plugin
     parse_filters,
 )
 
+AuthenticationRateLimitError = None
+
 try:
     import aiohttp
     from aiounifi.controller import Controller
@@ -165,6 +167,11 @@ try:
         ResponseError,
         TwoFaTokenRequired,
     )
+
+    try:
+        from aiounifi.errors import AuthenticationRateLimitError
+    except ImportError:
+        AuthenticationRateLimitError = None  # type: ignore[misc, assignment]
     from aiounifi.models.api import ApiRequest
     from aiounifi.models.configuration import Configuration
 
@@ -194,10 +201,15 @@ def mac_to_hostname(mac: str) -> str:
 
 def _inventory_value(value: Any) -> Any:
     """Return a JSON-serializable value for Ansible inventory host variables."""
-    if value is None or isinstance(value, (str, bool)):
+    if value is None or isinstance(value, bool):
         return value
+    # StrEnum members are isinstance(str) in Python 3.11+; handle enums first.
     if isinstance(value, enum.Enum):
+        if isinstance(value, enum.StrEnum):
+            return value.value
         return value.name
+    if isinstance(value, str):
+        return value
     if isinstance(value, (int, float)):
         return value
     if isinstance(value, (list, tuple)):
@@ -209,6 +221,14 @@ def _inventory_value(value: Any) -> Any:
 
 def _login_rate_limit_message(error: Exception) -> Optional[str]:
     """Return a user-facing message when UniFi throttles authentication."""
+    if AuthenticationRateLimitError is not None and isinstance(
+        error, AuthenticationRateLimitError
+    ):
+        return (
+            "UniFi login rate limit reached. Wait before retrying, use token "
+            "authentication, or increase inventory cache_timeout."
+        )
+
     err = str(error)
     if "429" in err or "AUTHENTICATION_FAILED_LIMIT_REACHED" in err:
         return (

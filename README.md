@@ -5,7 +5,7 @@
 [![Release](https://img.shields.io/github/v/release/aioue/ansible-unifi-inventory)](https://github.com/aioue/ansible-unifi-inventory/releases)
 [![License](https://img.shields.io/github/license/aioue/ansible-unifi-inventory)](LICENSE)
 
-Dynamic inventory plugin for Ansible that discovers hosts from a UniFi OS controller (UDM, UCG, etc.). Built on top of [aiounifi](https://github.com/Kane610/aiounifi).
+Dynamic inventory plugin for Ansible that discovers hosts from a UniFi OS controller (UDM, UCG, etc.). Built on top of [aiounifi](https://github.com/Kane610/aiounifi) (v91+ required; tested with [v92](https://github.com/Kane610/aiounifi/releases/tag/v92)).
 
 ```shell
 $ ansible-inventory -i inventory/unifi.yaml all --graph
@@ -17,7 +17,6 @@ $ ansible-inventory -i inventory/unifi.yaml all --graph
   |  |--Study_Proxmox
   |  |--phone
   |  |--homeassistant
-  |  |--Study_Mac_Mini_Ethernet
   |--@unifi_wireless_clients:
   |  |--Kitchen_Echo
   |  |--phone
@@ -25,12 +24,10 @@ $ ansible-inventory -i inventory/unifi.yaml all --graph
   |  |--nas-server
   |  |--Study_Proxmox
   |  |--homeassistant
-  |  |--Study_Mac_Mini_Ethernet
   |--@network_default:
   |  |--nas-server
   |  |--Study_Proxmox
   |  |--homeassistant
-  |  |--Study_Mac_Mini_Ethernet
   |  |--phone
   |--@network_iot:
   |  |--Kitchen_Echo
@@ -44,21 +41,26 @@ $ ansible-inventory -i inventory/unifi.yaml all --graph
   |  |--phone
   |--@unifi_devices:
   |  |--U6_Pro
-  |  |--U6_Mesh
   |  |--USW_Flex
   |  |--USW_Ultra
   |  |--Dream_Machine
   |--@unifi_uap:
   |  |--U6_Pro
-  |  |--U6_Mesh
   |--@unifi_usw:
   |  |--USW_Flex
   |  |--USW_Ultra
+  |--@device_state_connected:
+  |  |--U6_Pro
+  |  |--USW_Flex
+  |  |--USW_Ultra
+  |  |--Dream_Machine
+  |--@unifi_poe_powered:
+  |  |--USW_Flex
   |--@unifi_udm:
   |  |--Dream_Machine
 ```
 
-Example host variables (`include_devices: true` in the inventory file; output sanitized from a live run):
+Example host variables (`include_devices: true`; sanitized from a live run with aiounifi v92):
 
 ```shell
 $ ansible-inventory -i inventory/unifi.yaml --host Kitchen_Echo
@@ -71,8 +73,12 @@ $ ansible-inventory -i inventory/unifi.yaml --host Kitchen_Echo
   "vlan": 30,
   "vlan_name": "IoT",
   "network": "IoT",
+  "fixed_ip": "192.168.30.13",
+  "powersave_enabled": true,
+  "first_seen": 1735624765,
+  "association_time": 1783656843,
   "oui": "Amazon Technologies Inc.",
-  "last_seen_iso": "2026-07-22T18:17:02Z",
+  "last_seen_iso": "2026-07-22T18:31:41Z",
   "unifi_name": "Kitchen Echo"
 }
 
@@ -83,8 +89,11 @@ $ ansible-inventory -i inventory/unifi.yaml --host nas-server
   "mac": "bc:24:11:af:77:dd",
   "is_wired": true,
   "network": "Default",
+  "unifi_hostname": "nas-server",
+  "switch_depth": 1,
+  "wired_rate_mbps": 1000,
   "oui": "Example Vendor Inc.",
-  "last_seen_iso": "2026-07-22T18:17:14Z",
+  "last_seen_iso": "2026-07-22T18:31:44Z",
   "unifi_name": "nas-server"
 }
 
@@ -98,13 +107,10 @@ $ ansible-inventory -i inventory/unifi.yaml --host U6_Pro
   "firmware_version": "6.8.2.15592",
   "device_id": "671113bfba911339bf2be6c8",
   "state": "CONNECTED",
-  "upgradable": false,
-  "overheating": false,
-  "uptime": 4767038,
   "client_count": 7,
-  "cpu_percent": "7.7",
-  "mem_percent": "65.6",
-  "system_uptime": "4767038",
+  "cpu_percent": "8.0",
+  "mem_percent": "65.7",
+  "led_override": "off",
   "uplink": {
     "type": "wire",
     "up": true,
@@ -118,15 +124,10 @@ $ ansible-inventory -i inventory/unifi.yaml --host U6_Pro
 $ ansible-inventory -i inventory/unifi.yaml --host USW_Flex
 {
   "ansible_host": "192.168.1.231",
-  "ip": "192.168.1.231",
-  "mac": "94:2a:6f:fe:0e:e5",
   "type": "usw",
   "model": "USWED37",
-  "firmware_version": "2.1.8.971",
   "state": "CONNECTED",
   "client_count": 5,
-  "cpu_percent": "11.0",
-  "mem_percent": "82.8",
   "poe_ports": [
     {
       "port_idx": 6,
@@ -134,10 +135,9 @@ $ ansible-inventory -i inventory/unifi.yaml --host USW_Flex
       "up": true,
       "poe_enable": true,
       "poe_mode": "auto",
-      "poe_power": "6.00",
+      "poe_power": "5.91",
       "poe_voltage": "47.24",
-      "poe_good": true,
-      "is_uplink": false
+      "poe_good": true
     },
     {
       "port_idx": 7,
@@ -147,10 +147,14 @@ $ ansible-inventory -i inventory/unifi.yaml --host USW_Flex
       "poe_mode": "auto",
       "poe_power": "13.50",
       "poe_voltage": "47.05",
-      "poe_good": true,
-      "is_uplink": false
+      "poe_good": true
     }
   ],
+  "uplink": {
+    "type": "wire",
+    "speed": 2500,
+    "uplink_device_name": "Dream Machine"
+  },
   "unifi_name": "USW Flex 2.5G 8 PoE"
 }
 ```
@@ -172,7 +176,7 @@ $ ansible-inventory -i inventory/unifi.yaml --host USW_Flex
 - **Python 3.12+** (newer `aiounifi` releases may require 3.13+; check `pip install` output)
 - **Ansible 2.15+**
 - **UniFi OS controller** accessible via network (UDM, UCG, etc.).
-- **API credentials**: API token (preferred), local admin without 2FA, or username/password with `totp_secret` when using a 2FA-enabled account (requires a recent aiounifi release with [PR #990](https://github.com/Kane610/aiounifi/pull/990) support).
+- **API credentials**: API token (preferred), local admin without 2FA, or username/password with `totp_secret` for 2FA accounts (aiounifi v91+)
 - **Python dependencies**: Install in the same Python environment as Ansible:
   ```bash
   pip install -r requirements.txt
@@ -406,7 +410,7 @@ For password login you have three options:
 
 1. **API token** (see above) - no login call, avoids rate limits.
 2. **Local admin without 2FA** - simplest password flow for automation.
-3. **`totp_secret`** - TOTP seed for accounts with 2FA enabled (local or SSO). Requires aiounifi with [automated 2FA login](https://github.com/Kane610/aiounifi/pull/990) (`Configuration.totp_secret`). Vault-friendly:
+3. **`totp_secret`** - TOTP seed for accounts with 2FA enabled (local or SSO). Requires aiounifi v91+ (`Configuration.totp_secret`, `pyotp`). Vault-friendly:
 
 ```yaml
 username: "{{ vault_unifi_username }}"
@@ -578,7 +582,7 @@ ansible-playbook -i prod.unifi.yml site.yml
 - Incorrect username/password or token.
 - Token expired or revoked.
 - **Two-Factor Authentication (2FA)** on a password account without `totp_secret` configured.
-- Installed aiounifi is too old for `totp_secret` (upgrade after [PR #990](https://github.com/Kane610/aiounifi/pull/990) is released).
+- Installed aiounifi is older than v91 (upgrade for `totp_secret` and `AuthenticationRateLimitError`).
 - Using a ui.com SSO account without token or `totp_secret`.
 
 **Solution:**

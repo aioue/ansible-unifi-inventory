@@ -170,6 +170,29 @@ def test_build_poe_ports_filters_non_poe_ports() -> None:
     json.dumps(ports)
 
 
+def test_inventory_value_serializes_strenum() -> None:
+    class DeviceType(enum.StrEnum):
+        ACCESS_POINT = "uap"
+
+    result = _inventory_value(DeviceType.ACCESS_POINT)
+
+    assert result == "uap"
+    assert type(result) is str
+    json.dumps(result)
+
+
+def test_login_rate_limit_message_handles_authentication_rate_limit_error() -> None:
+    try:
+        from aiounifi.errors import AuthenticationRateLimitError
+    except ImportError:
+        pytest.skip("aiounifi AuthenticationRateLimitError not available")
+
+    message = _login_rate_limit_message(AuthenticationRateLimitError("limited"))
+
+    assert message is not None
+    assert "rate limit" in message.lower()
+
+
 def test_template_option_resolves_jinja() -> None:
     plugin = InventoryModule()
     plugin.templar = SimpleNamespace(
