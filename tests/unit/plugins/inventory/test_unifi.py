@@ -18,7 +18,9 @@ from ansible_collections.aioue.network.plugins.inventory.unifi import (
     _build_outlets,
     _build_poe_ports,
     _inventory_value,
+    _iter_handler_items,
     _login_rate_limit_message,
+    _set_optional_hostvar,
     _summarize_uplink,
     mac_to_hostname,
     sanitize_group_name,
@@ -520,3 +522,170 @@ def test_parse_with_mocked_controller(tmp_path: Path) -> None:
     assert "laptop" in plugin.inventory.hosts
     assert plugin.inventory.get_host("laptop").get_vars()["ansible_host"] == "192.168.1.20"
     assert "unifi_wired_clients" in plugin.inventory.groups
+
+
+def test_set_optional_hostvar_skips_empty_values() -> None:
+    hostvars: dict[str, object] = {"existing": True}
+
+    _set_optional_hostvar(hostvars, "missing", None)
+    _set_optional_hostvar(hostvars, "blank", "")
+    _set_optional_hostvar(hostvars, "present", "value")
+
+    assert hostvars == {"existing": True, "present": "value"}
+
+
+def test_summarize_uplink_handles_non_dict() -> None:
+    assert _summarize_uplink("wire") == "wire"
+
+
+def test_build_outlets_returns_empty_when_no_outlets() -> None:
+    assert _build_outlets(SimpleNamespace()) == []
+
+
+def test_iter_handler_items_prefers_items_callable() -> None:
+    handler = SimpleNamespace(
+        items=lambda: [("aa:bb:cc:dd:ee:01", SimpleNamespace(mac="aa:bb:cc:dd:ee:01"))]
+    )
+
+    assert list(_iter_handler_items(handler)) == [
+        ("aa:bb:cc:dd:ee:01", handler.items()[0][1])
+    ]
+
+
+def test_iter_handler_items_falls_back_to_private_items() -> None:
+    client = SimpleNamespace(mac="aa:bb:cc:dd:ee:02")
+    handler = SimpleNamespace(_items={"aa:bb:cc:dd:ee:02": client})
+
+    assert list(_iter_handler_items(handler)) == [("aa:bb:cc:dd:ee:02", client)]
+
+
+def test_build_client_host_skips_stale_clients() -> None:
+    plugin = InventoryModule()
+    client = SimpleNamespace(
+        last_seen=1_700_000_000,
+        ip="192.168.1.50",
+        raw={"ip": "192.168.1.50"},
+        is_wired=True,
+    )
+
+    with patch.object(plugin, "get_option", return_value="name"):
+        host = plugin._build_client_host(
+            "aa:bb:cc:dd:ee:ff",
+            client,
+            vlan_names={},
+            current_time=1_700_100_000,
+            last_seen_threshold=3600,
+        )
+
+    assert host is None
+
+
+def test_build_client_host_wireless_includes_powersave_not_wired_fields() -> None:
+    plugin = InventoryModule()
+    client = SimpleNamespace(
+        last_seen=1_700_000_000,
+        ip="192.168.1.50",
+        raw={"ip": "192.168.1.50"},
+        name="phone",
+        is_wired=False,
+        essid="home.wifi",
+        powersave_enabled=True,
+    )
+
+    with patch.object(plugin, "get_option", side_effect=lambda key: "name" if key == "hostname" else "default"):
+        host = plugin._build_client_host(
+            "aa:bb:cc:dd:ee:ff",
+            client,
+            vlan_names={},
+            current_time=1_700_000_100,
+            last_seen_threshold=3600,
+        )
+
+    assert host is not None
+    assert host["hostvars"]["powersave_enabled"] is True
+    assert "wired_rate_mbps" not in host["hostvars"]
+    assert "switch_depth" not in host["hostvars"]
+
+
+def test_build_device_host_includes_thermal_outlets_and_status_groups() -> None:
+    class DeviceState(enum.IntEnum):
+        CONNECTED = 1
+
+    device = SimpleNamespace(
+        ip="192.168.1.1",
+        name="Gateway",
+        type="udm",
+        model="UDMPRO",
+        version="4.0.0",
+        id="gw-1",
+        state=DeviceState.CONNECTED,
+        upgradable=True,
+        overheating=True,
+        general_temperature=52,
+        fan_level=3,
+        has_fan=True,
+        has_temperature=True,
+        last_seen=1_700_000_000,
+        supports_led_ring=True,
+        led_override="on",
+        outlet_table=[
+            {"index": 1, "name": "LAN", "relay_state": True, "cycle_enabled": False}
+        ],
+        uplink={"type": "wire", "speed": 1000, "uplink_device_name": "ISP"},
+        port_table=[],
+    )
+
+    plugin = InventoryModule()
+
+    with patch.object(plugin, "get_option", side_effect=lambda key: "name" if key == "hostname" else "default"):
+        host = plugin._build_device_host("aa:bb:cc:dd:ee:ff", device)
+
+    assert host is not None
+    assert host["hostvars"]["general_temperature"] == 52
+    assert host["hostvars"]["has_fan"] is True
+    assert host["hostvars"]["outlets"][0]["relay_state"] is True
+    assert host["hostvars"]["uplink"]["uplink_device_name"] == "ISP"
+    assert "unifi_upgradable" in host["groups"]
+    assert "unifi_overheating" in host["groups"]
+    assert "unifi_poe_powered" not in host["groups"]
+    json.dumps(host["hostvars"])
+
+
+def test_build_device_host_omits_poe_powered_without_active_ports() -> None:
+    device = SimpleNamespace(
+        ip="192.168.1.10",
+        name="Switch",
+        type="usw",
+        model="USW24",
+        version="1.0.0",
+        state=1,
+        port_table=[
+            {
+                "port_idx": 1,
+                "name": "Port 1",
+                "port_poe": True,
+                "poe_enable": True,
+                "poe_good": False,
+                "poe_power": "0.00",
+            }
+        ],
+    )
+
+    plugin = InventoryModule()
+
+    with patch.object(plugin, "get_option", return_value="name"):
+        host = plugin._build_device_host("aa:bb:cc:dd:ee:ff", device)
+
+    assert host is not None
+    assert "unifi_poe_powered" not in host["groups"]
+
+
+def test_template_option_resolves_totp_secret() -> None:
+    plugin = InventoryModule()
+    plugin.templar = SimpleNamespace(
+        is_template=lambda value: "{{" in value,
+        template=lambda value: "totp-seed" if "totp" in value else value,
+    )
+
+    with patch.object(plugin, "get_option", return_value="{{ vault_totp }}"):
+        assert plugin._template_option("totp_secret") == "totp-seed"

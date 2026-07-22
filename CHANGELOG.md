@@ -9,6 +9,10 @@
 - Trim `uplink` to a compact summary (drops rx/tx counters)
 - Device groups: `device_state_*`, `unifi_upgradable`, `unifi_overheating`, `unifi_poe_powered`
 
+**Tests:**
+
+- Cover optional hostvar helpers, handler iteration, stale client filtering, thermal/outlet device fields, and status groups
+
 ## 1.1.4 (2026-07-22)
 
 **Fixes:**
