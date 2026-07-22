@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1 (2026-07-22)
+
+**Fixes:**
+
+- Inline `filters` plugin documentation so Galaxy import no longer fails on the external doc fragment
+- Upgrade GitHub Actions to Node 24 runtimes (`checkout@v5`, `setup-python@v6`, `action-gh-release@v3`)
+- Set `ANSIBLE_COLLECTIONS_PATH` during release prep to silence ansible-galaxy install warnings
+
 ## 1.1.0 (2026-07-22)
 
 **Breaking changes:**

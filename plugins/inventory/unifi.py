@@ -24,7 +24,6 @@ DOCUMENTATION = r"""
     extends_documentation_fragment:
         - ansible.builtin.constructed
         - ansible.builtin.inventory_cache
-        - community.library_inventory_filtering_v1.inventory_filter
     options:
         plugin:
             description: Name of the plugin
@@ -86,8 +85,25 @@ DOCUMENTATION = r"""
             env:
                 - name: UNIFI_HOSTNAME
         filters:
-            description: A dict of filter definitions used to include or exclude hosts from the inventory.
+            description:
+                - A list of include/exclude filters that allows to select/deselect hosts for this inventory.
+                - Filters are processed sequentially until the first filter where O(filters[].exclude) or O(filters[].include) matches is found.
+                - In case O(filters[].exclude) matches, the host is excluded, and in case O(filters[].include) matches, the host is included.
+                - In case no filter matches, the host is included.
+            type: list
+            elements: dict
             version_added: 1.1.0
+            suboptions:
+                exclude:
+                    description:
+                        - A Jinja2 condition. If it matches for a host, that host is B(excluded).
+                        - Exactly one of O(filters[].exclude) and O(filters[].include) can be specified.
+                    type: str
+                include:
+                    description:
+                        - A Jinja2 condition. If it matches for a host, that host is B(included).
+                        - Exactly one of O(filters[].exclude) and O(filters[].include) can be specified.
+                    type: str
 """
 
 EXAMPLES = r"""
