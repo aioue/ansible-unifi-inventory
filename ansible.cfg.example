@@ -1,6 +1,6 @@
 # Example Ansible Configuration for the aioue.network collection
 #
-# When installed as a collection (ansible-galaxy collection install),
+# When installed as a collection (ansible-galaxy collection install aioue.network),
 # Ansible auto-discovers the plugin via FQCN - no enable_plugins needed.
 #
 # This file is only useful if you're running the plugin from a local
@@ -16,3 +16,9 @@ inventory = ./inventory/unifi.yaml
 # Collection-installed plugins are discovered automatically.
 # For local development, uncomment and add the FQCN:
 # enable_plugins = host_list, script, auto, yaml, ini, toml, aioue.network.unifi
+
+# Standard Ansible inventory caching (replaces the plugin's former cache_ttl/cache_path options)
+cache = true
+cache_plugin = ansible.builtin.jsonfile
+cache_timeout = 30
+cache_connection = /tmp/ansible_inventory_cache

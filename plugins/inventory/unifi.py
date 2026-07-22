@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright (c) 2025 Tom Paine (https://github.com/aioue)
 # GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -16,14 +15,16 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 DOCUMENTATION = r"""
-    name: aioue.network.unifi
-    plugin_type: inventory
+    name: unifi
     short_description: UniFi dynamic inventory plugin
     description:
         - Discovers UniFi clients and optionally devices from a UniFi OS controller
         - Supports both token-based and username/password authentication
-        - Includes caching support to reduce API calls
         - Groups hosts by connection type (wired/wireless), SSID, VLAN, and device type
+    extends_documentation_fragment:
+        - ansible.builtin.constructed
+        - ansible.builtin.inventory_cache
+        - community.library_inventory_filtering_v1.inventory_filter
     options:
         plugin:
             description: Name of the plugin
@@ -74,18 +75,19 @@ DOCUMENTATION = r"""
             default: 30
             env:
                 - name: UNIFI_LAST_SEEN_MINUTES
-        cache_ttl:
-            description: Cache TTL in seconds (0 to disable)
-            type: int
-            default: 30
-            env:
-                - name: UNIFI_CACHE_TTL
-        cache_path:
-            description: Path to cache file
+        hostname:
+            description:
+                - How to derive the inventory hostname for clients and devices.
+                - V(mac) uses the MAC address with colons replaced by hyphens (e.g. aa-bb-cc-dd-ee-ff).
+                - V(name) uses the UniFi friendly name with sanitization; the original name is stored in C(unifi_name).
             type: str
-            default: ./.cache/unifi_inventory.json
+            default: name
+            choices: [mac, name]
             env:
-                - name: UNIFI_CACHE_PATH
+                - name: UNIFI_HOSTNAME
+        filters:
+            # This option is provided by the community.library_inventory_filtering_v1.inventory_filter doc fragment
+            version_added: 1.1.0
 """
 
 EXAMPLES = r"""
@@ -98,24 +100,36 @@ site: default
 verify_ssl: false
 include_devices: false
 last_seen_minutes: 30
-cache_ttl: 30
-cache_path: ./.cache/unifi_inventory.json
+cache: true
+cache_timeout: 30
 
 # Example with token authentication
 plugin: aioue.network.unifi
 url: https://192.168.1.1
 token: your-api-token-here
 verify_ssl: false
+
+# Optional: use MAC-based hostnames for stability when device names change
+# hostname: mac
+keyed_groups:
+  - key: ssid
+    prefix: ssid
+    separator: ""
 """
 
 import asyncio
+import concurrent.futures
 import logging
 import re
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ansible.errors import AnsibleError
-from ansible.plugins.inventory import BaseInventoryPlugin, Cacheable
+from ansible.plugins.inventory import BaseInventoryPlugin, Cacheable, Constructable
+from ansible_collections.community.library_inventory_filtering_v1.plugins.plugin_utils.inventory_filter import (
+    filter_host,
+    parse_filters,
+)
 
 try:
     import aiohttp
@@ -123,7 +137,6 @@ try:
     from aiounifi.errors import (
         AiounifiException,
         LoginRequired,
-        RequestError,
         ResponseError,
         TwoFaTokenRequired,
     )
@@ -134,38 +147,85 @@ try:
 except ImportError:
     HAS_AIOUNIFI = False
 
-# Configure logging
+VALID_PLUGIN_NAMES = ("aioue.network.unifi",)
+
 logger = logging.getLogger(__name__)
 
 
 def sanitize_group_name(name: str) -> str:
-    """Sanitize group name to lowercase alphanumeric and underscore"""
+    """Sanitize group name to lowercase alphanumeric and underscore."""
     return re.sub(r"[^a-z0-9_]", "_", name.lower())
 
 
-class InventoryModule(BaseInventoryPlugin, Cacheable):
-    """UniFi dynamic inventory plugin"""
+def sanitize_hostname(name: str) -> str:
+    """Sanitize a friendly name for use as an Ansible inventory hostname."""
+    return name.replace(" ", "_")
+
+
+def mac_to_hostname(mac: str) -> str:
+    """Convert a MAC address to a stable inventory hostname."""
+    return mac.replace(":", "-").lower()
+
+
+def _iter_handler_items(handler: Any) -> Iterable[Tuple[str, Any]]:
+    """Iterate (id, item) pairs from an aiounifi handler without private API access."""
+    items_fn = getattr(handler, "items", None)
+    if callable(items_fn):
+        return items_fn()
+
+    values_fn = getattr(handler, "values", None)
+    if callable(values_fn):
+        result = []
+        for item in values_fn():
+            item_id = getattr(item, "mac", None)
+            if item_id is None and hasattr(item, "raw"):
+                item_id = item.raw.get("mac")
+            if item_id is not None:
+                result.append((item_id, item))
+        return result
+
+    all_fn = getattr(handler, "all", None)
+    if callable(all_fn):
+        result = []
+        for item in all_fn():
+            item_id = getattr(item, "mac", None)
+            if item_id is None and hasattr(item, "raw"):
+                item_id = item.raw.get("mac")
+            if item_id is not None:
+                result.append((item_id, item))
+        return result
+
+    private_items = getattr(handler, "_items", None)
+    if isinstance(private_items, dict):
+        return private_items.items()
+
+    return []
+
+
+class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
+    """UniFi dynamic inventory plugin."""
 
     NAME = "aioue.network.unifi"
 
     def verify_file(self, path):
-        """Verify that the inventory file is valid for this plugin"""
-        if super(InventoryModule, self).verify_file(path):
-            if path.endswith(("unifi.yaml", "unifi.yml")):
-                return True
-            try:
-                import yaml
+        """Verify that the inventory file is valid for this plugin."""
+        if not super(InventoryModule, self).verify_file(path):
+            return False
 
-                with open(path, "r") as f:
-                    data = yaml.safe_load(f)
-                if isinstance(data, dict) and data.get("plugin") == self.NAME:
-                    return True
-            except Exception:
-                pass
-        return False
+        if path.endswith((".unifi.yaml", ".unifi.yml", "unifi.yaml", "unifi.yml")):
+            return True
+
+        try:
+            import yaml
+
+            with open(path, "r") as f:
+                data = yaml.safe_load(f)
+            return isinstance(data, dict) and data.get("plugin") in VALID_PLUGIN_NAMES
+        except Exception:
+            return False
 
     def parse(self, inventory, loader, path, cache=True):
-        """Parse inventory from UniFi controller"""
+        """Parse inventory from UniFi controller."""
         super(InventoryModule, self).parse(inventory, loader, path, cache)
 
         if not HAS_AIOUNIFI:
@@ -174,109 +234,314 @@ class InventoryModule(BaseInventoryPlugin, Cacheable):
                 "Install them with: pip install aiounifi aiohttp"
             )
 
-        # Read configuration from the inventory file
         self._read_config_data(path)
 
-        # Get configuration options
-        self.url = self.get_option("url")
-        self.username = self.get_option("username") or ""
-        self.password = self.get_option("password") or ""
-        self.token = self.get_option("token") or ""
-        self.site = self.get_option("site")
-        self.verify_ssl = self.get_option("verify_ssl")
-        self.include_devices = self.get_option("include_devices")
-        self.last_seen_minutes = self.get_option("last_seen_minutes")
-        self.cache_ttl = self.get_option("cache_ttl")
-        self.cache_path = self.get_option("cache_path")
-
-        # Validate configuration
-        if not self.url:
+        if not self.get_option("url"):
             raise AnsibleError("UniFi controller URL is required")
-        if not self.token and not (self.username and self.password):
+
+        token = self.get_option("token") or ""
+        username = self.get_option("username") or ""
+        password = self.get_option("password") or ""
+        if not token and not (username and password):
             raise AnsibleError(
                 "Authentication required: provide token or username+password"
             )
 
-        # Fetch inventory from controller (no caching for now - can be added later)
-        inventory_data = asyncio.run(self._fetch_from_controller())
-        self._populate_inventory(inventory_data)
+        cache_key = self.get_cache_key(path)
+        user_cache_setting = self.get_option("cache")
+        attempt_to_read_cache = user_cache_setting and cache
+        if attempt_to_read_cache:
+            try:
+                results = self._cache[cache_key]
+            except KeyError:
+                results = None
+        else:
+            results = None
 
-    def _get_cache_key(self, path):
-        """Generate cache key based on configuration"""
-        return f"unifi_{self.url}_{self.site}"
+        if results is None:
+            results = self._run_async(self._fetch_from_controller())
+            if user_cache_setting:
+                self._cache[cache_key] = results
 
-    def _populate_from_cache(self, cached_data):
-        """Populate inventory from cached data"""
-        self._populate_inventory(cached_data)
+        self._populate_inventory(results)
 
-    def _populate_inventory(self, inventory_data):
-        """Populate Ansible inventory from UniFi inventory data"""
-        # Add all hosts
-        for hostname, hostvars in (
-            inventory_data.get("_meta", {}).get("hostvars", {}).items()
-        ):
+    def _run_async(self, coro):
+        """Run a coroutine in a dedicated thread with its own event loop."""
+        def _target():
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(_target).result()
+
+    def _resolve_client_hostname(
+        self, mac: str, client: Any, mode: str
+    ) -> Tuple[str, Optional[str]]:
+        """Return inventory hostname and optional original UniFi name."""
+        friendly = (
+            getattr(client, "name", None)
+            or getattr(client, "hostname", None)
+            or getattr(client, "display_name", None)
+            or getattr(client, "alias", None)
+            or getattr(client, "friendly_name", None)
+        )
+
+        if mode == "mac":
+            return mac_to_hostname(mac), friendly
+
+        if not friendly:
+            oui = getattr(client, "oui", None)
+            if oui:
+                friendly = f"{oui.replace(' ', '_')}_{mac[-8:].replace(':', '')}"
+            else:
+                friendly = mac
+
+        return sanitize_hostname(friendly), friendly
+
+    def _resolve_device_hostname(
+        self, mac: str, device: Any, mode: str
+    ) -> Tuple[str, Optional[str]]:
+        """Return inventory hostname and optional original UniFi name."""
+        name = getattr(device, "name", None)
+
+        if mode == "mac":
+            return mac_to_hostname(mac), name
+
+        if not name:
+            model = getattr(device, "model", "device")
+            name = f"{model}_{mac[-8:].replace(':', '')}"
+
+        return sanitize_hostname(name), name
+
+    def _build_client_host(
+        self,
+        mac: str,
+        client: Any,
+        vlan_names: Dict[int, str],
+        current_time: float,
+        last_seen_threshold: float,
+    ) -> Optional[Dict[str, Any]]:
+        """Build a host dict for a UniFi client, or None if it should be skipped."""
+        last_seen = getattr(client, "last_seen", 0)
+        if (current_time - last_seen) > last_seen_threshold:
+            return None
+
+        hostname_mode = self.get_option("hostname")
+        hostname, unifi_name = self._resolve_client_hostname(mac, client, hostname_mode)
+
+        ipv4 = getattr(client, "ip", None) or client.raw.get("ip")
+
+        ipv6_addresses = client.raw.get("ipv6_addresses", [])
+        ipv6 = None
+        ipv6_link_local = None
+
+        if ipv6_addresses:
+            for addr in ipv6_addresses:
+                if addr.startswith("fe80:"):
+                    if not ipv6_link_local:
+                        ipv6_link_local = addr
+                else:
+                    ipv6 = addr
+                    break
+
+            if not ipv6 and ipv6_link_local:
+                ipv6 = ipv6_link_local
+
+        ansible_host = ipv4 or ipv6
+        if not ansible_host:
+            return None
+
+        is_wired = getattr(client, "is_wired", False)
+        hostvars = {
+            "ansible_host": ansible_host,
+            "mac": mac,
+            "is_wired": is_wired,
+            "site": self.get_option("site"),
+            "last_seen_unix": int(last_seen),
+            "last_seen_iso": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(last_seen)
+            ),
+        }
+
+        if unifi_name is not None:
+            hostvars["unifi_name"] = unifi_name
+
+        if ipv4:
+            hostvars["ipv4"] = ipv4
+            hostvars["ip"] = ipv4
+        if ipv6:
+            hostvars["ipv6"] = ipv6
+        if ipv6_addresses and len(ipv6_addresses) > 1:
+            hostvars["ipv6_addresses"] = ipv6_addresses
+
+        if not is_wired:
+            ssid = getattr(client, "essid", None)
+            if ssid:
+                hostvars["ssid"] = ssid
+            ap_mac = getattr(client, "ap_mac", None)
+            if ap_mac:
+                hostvars["ap_mac"] = ap_mac
+        else:
+            sw_mac = getattr(client, "sw_mac", None)
+            if sw_mac:
+                hostvars["sw_mac"] = sw_mac
+            sw_port = getattr(client, "sw_port", None)
+            if sw_port:
+                hostvars["port"] = sw_port
+
+        vlan = getattr(client, "vlan", None) or client.raw.get("vlan")
+        network = getattr(client, "network", None) or client.raw.get("network")
+        network_id = getattr(client, "network_id", None) or client.raw.get(
+            "network_id"
+        )
+
+        if network:
+            hostvars["network"] = network
+        if network_id:
+            hostvars["network_id"] = network_id
+        if vlan:
+            hostvars["vlan"] = vlan
+            vlan_name = vlan_names.get(vlan)
+            if vlan_name:
+                hostvars["vlan_name"] = vlan_name
+
+        oui = getattr(client, "oui", None)
+        if oui:
+            hostvars["oui"] = oui
+
+        groups = ["unifi_clients"]
+        if is_wired:
+            groups.append("unifi_wired_clients")
+        else:
+            groups.append("unifi_wireless_clients")
+            ssid = hostvars.get("ssid")
+            if ssid:
+                groups.append(f"ssid_{sanitize_group_name(ssid)}")
+
+        if network:
+            groups.append(f"network_{sanitize_group_name(network)}")
+
+        if vlan:
+            groups.append(f"vlan_{vlan}")
+            vlan_name = vlan_names.get(vlan)
+            if vlan_name:
+                groups.append(f"vlan_{sanitize_group_name(vlan_name)}")
+
+        return {"hostname": hostname, "hostvars": hostvars, "groups": groups}
+
+    def _build_device_host(self, mac: str, device: Any) -> Optional[Dict[str, Any]]:
+        """Build a host dict for a UniFi device, or None if it should be skipped."""
+        ip = getattr(device, "ip", None)
+        if not ip:
+            return None
+
+        hostname_mode = self.get_option("hostname")
+        hostname, unifi_name = self._resolve_device_hostname(mac, device, hostname_mode)
+
+        dev_type = getattr(device, "type", "unknown")
+        model = getattr(device, "model", "unknown")
+        firmware = getattr(device, "version", "unknown")
+        adopted = getattr(device, "adopted", False)
+        state = getattr(device, "state", "unknown")
+
+        hostvars = {
+            "ansible_host": ip,
+            "mac": mac,
+            "ip": ip,
+            "model": model,
+            "type": dev_type,
+            "firmware_version": firmware,
+            "site": self.get_option("site"),
+            "adopted": adopted,
+            "state": state,
+        }
+
+        if unifi_name is not None:
+            hostvars["unifi_name"] = unifi_name
+
+        groups = ["unifi_devices", sanitize_group_name(f"unifi_{dev_type}")]
+
+        return {"hostname": hostname, "hostvars": hostvars, "groups": groups}
+
+    def _populate_inventory(self, hosts: List[Dict[str, Any]]) -> None:
+        """Populate Ansible inventory from fetched host dicts."""
+        strict = self.get_option("strict")
+        filters = parse_filters(self.get_option("filters"))
+
+        for host_data in hosts:
+            hostname = host_data["hostname"]
+            hostvars = host_data["hostvars"]
+            groups = host_data.get("groups", [])
+
+            if not filter_host(self, hostname, hostvars, filters):
+                continue
+
             self.inventory.add_host(hostname)
             for key, value in hostvars.items():
                 self.inventory.set_variable(hostname, key, value)
 
-        # Add groups
-        for group_name, group_data in inventory_data.items():
-            if group_name == "_meta" or group_name == "all":
-                continue
+            self._set_composite_vars(
+                self.get_option("compose"), hostvars, hostname, strict=strict
+            )
+            self._add_host_to_composed_groups(
+                self.get_option("groups"), hostvars, hostname, strict=strict
+            )
+            self._add_host_to_keyed_groups(
+                self.get_option("keyed_groups"), hostvars, hostname, strict=strict
+            )
 
-            self.inventory.add_group(group_name)
-            for hostname in group_data.get("hosts", []):
+            for group_name in groups:
+                self.inventory.add_group(group_name)
                 self.inventory.add_child(group_name, hostname)
 
-    async def _fetch_from_controller(self) -> Dict[str, Any]:
-        """Fetch inventory from UniFi controller"""
-        inventory: Dict[str, Any] = {
-            "_meta": {"hostvars": {}},
-            "all": {"hosts": []},
-        }
+    async def _fetch_from_controller(self) -> List[Dict[str, Any]]:
+        """Fetch inventory from UniFi controller."""
+        hosts: List[Dict[str, Any]] = []
 
-        ssl_context = False if not self.verify_ssl else True
+        url = self.get_option("url")
+        verify_ssl = self.get_option("verify_ssl")
+        ssl_context = False if not verify_ssl else True
 
-        # Create aiohttp session
         connector = aiohttp.TCPConnector(
             ssl=ssl_context if ssl_context is False else None
         )
         session = aiohttp.ClientSession(connector=connector)
 
         try:
-            # For token auth, set the cookie in the session
-            if self.token:
+            token = self.get_option("token") or ""
+            if token:
                 from http.cookies import SimpleCookie
 
                 from yarl import URL
 
                 cookies = SimpleCookie()
-                cookies["unifises"] = self.token
-                session.cookie_jar.update_cookies(cookies, URL(self.url))
+                cookies["unifises"] = token
+                session.cookie_jar.update_cookies(cookies, URL(url))
 
-            # Extract host from URL
             from urllib.parse import urlparse
 
-            parsed = urlparse(self.url)
+            parsed = urlparse(url)
             host = parsed.hostname or parsed.path
             port = parsed.port or 443
 
-            # Create configuration object
             config = Configuration(
                 session=session,
                 host=host,
-                username=self.username,
-                password=self.password,
+                username=self.get_option("username") or "",
+                password=self.get_option("password") or "",
                 port=port,
-                site=self.site,
+                site=self.get_option("site"),
                 ssl_context=ssl_context,
             )
 
-            # Create controller
             controller = Controller(config)
 
-            # Login (skip if using token)
-            if not self.token:
+            if not token:
                 try:
                     await controller.login()
                 except LoginRequired:
@@ -289,10 +554,9 @@ class InventoryModule(BaseInventoryPlugin, Cacheable):
                 except (ResponseError, AiounifiException) as e:
                     raise AnsibleError(f"Controller error during login: {e}")
 
-            # Fetch clients and devices
             try:
                 await controller.clients.update()
-                if self.include_devices:
+                if self.get_option("include_devices"):
                     await controller.devices.update()
             except (AiounifiException, ResponseError) as e:
                 if "403" in str(e) or "401" in str(e):
@@ -302,8 +566,7 @@ class InventoryModule(BaseInventoryPlugin, Cacheable):
                     )
                 raise AnsibleError(f"Failed to fetch data from controller: {e}")
 
-            # Fetch network configuration to get VLAN names
-            vlan_names = {}
+            vlan_names: Dict[int, str] = {}
             try:
                 network_request = ApiRequest(method="get", path="/rest/networkconf")
                 networks_response = await controller.request(network_request)
@@ -314,209 +577,25 @@ class InventoryModule(BaseInventoryPlugin, Cacheable):
                         if vlan_id and name:
                             vlan_names[int(vlan_id)] = name
             except Exception as e:
-                # If we can't fetch networks, just continue without VLAN names
                 logger.warning(
-                    f"Failed to fetch network configuration for VLAN names: {e}"
+                    "Failed to fetch network configuration for VLAN names: %s", e
                 )
 
-            # Process clients
             current_time = time.time()
-            last_seen_threshold = self.last_seen_minutes * 60
+            last_seen_threshold = self.get_option("last_seen_minutes") * 60
 
-            for mac, client in controller.clients._items.items():
-                # Filter by last_seen
-                last_seen = getattr(client, "last_seen", 0)
-                if (current_time - last_seen) > last_seen_threshold:
-                    continue
-
-                # Determine hostname
-                hostname = (
-                    getattr(client, "name", None)
-                    or getattr(client, "hostname", None)
-                    or getattr(client, "display_name", None)
-                    or getattr(client, "alias", None)
-                    or getattr(client, "friendly_name", None)
+            for mac, client in _iter_handler_items(controller.clients):
+                host = self._build_client_host(
+                    mac, client, vlan_names, current_time, last_seen_threshold
                 )
+                if host is not None:
+                    hosts.append(host)
 
-                # If no name, create one from OUI or MAC
-                if not hostname:
-                    oui = getattr(client, "oui", None)
-                    if oui:
-                        hostname = (
-                            f"{oui.replace(' ', '_')}_{mac[-8:].replace(':', '')}"
-                        )
-                    else:
-                        hostname = mac
-
-                # Replace spaces with underscores for Ansible compatibility
-                # Ansible's YAML parser and host pattern matching doesn't handle spaces
-                if hostname:
-                    hostname = hostname.replace(" ", "_")
-
-                # Get IP addresses (both IPv4 and IPv6)
-                ipv4 = getattr(client, "ip", None) or client.raw.get("ip")
-
-                # IPv6 addresses are in an array - get the first non-link-local one
-                ipv6_addresses = client.raw.get("ipv6_addresses", [])
-                ipv6 = None
-                ipv6_link_local = None
-
-                if ipv6_addresses:
-                    for addr in ipv6_addresses:
-                        if addr.startswith("fe80:"):
-                            # Link-local address - save as fallback
-                            if not ipv6_link_local:
-                                ipv6_link_local = addr
-                        else:
-                            # Global/ULA address - prefer this
-                            ipv6 = addr
-                            break
-
-                    # If no global/ULA, use link-local
-                    if not ipv6 and ipv6_link_local:
-                        ipv6 = ipv6_link_local
-
-                # ansible_host prefers IPv4, falls back to IPv6
-                ansible_host = ipv4 or ipv6
-                if not ansible_host:
-                    continue
-
-                # Build hostvars
-                is_wired = getattr(client, "is_wired", False)
-                hostvars = {
-                    "ansible_host": ansible_host,
-                    "mac": mac,
-                    "is_wired": is_wired,
-                    "site": self.site,
-                    "last_seen_unix": int(last_seen),
-                    "last_seen_iso": time.strftime(
-                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(last_seen)
-                    ),
-                }
-
-                # Add IP addresses
-                if ipv4:
-                    hostvars["ipv4"] = ipv4
-                    hostvars["ip"] = ipv4  # Keep 'ip' for backward compatibility
-                if ipv6:
-                    hostvars["ipv6"] = ipv6
-                # Add all IPv6 addresses if there are multiple
-                if ipv6_addresses and len(ipv6_addresses) > 1:
-                    hostvars["ipv6_addresses"] = ipv6_addresses
-
-                # Add wireless-specific info
-                if not is_wired:
-                    ssid = getattr(client, "essid", None)
-                    if ssid:
-                        hostvars["ssid"] = ssid
-                    ap_mac = getattr(client, "ap_mac", None)
-                    if ap_mac:
-                        hostvars["ap_mac"] = ap_mac
-
-                # Add wired-specific info
-                if is_wired:
-                    sw_mac = getattr(client, "sw_mac", None)
-                    if sw_mac:
-                        hostvars["sw_mac"] = sw_mac
-                    sw_port = getattr(client, "sw_port", None)
-                    if sw_port:
-                        hostvars["port"] = sw_port
-
-                # Add VLAN and network info if available
-                # Try both the property and raw dict access
-                vlan = getattr(client, "vlan", None) or client.raw.get("vlan")
-                network = getattr(client, "network", None) or client.raw.get("network")
-                network_id = getattr(client, "network_id", None) or client.raw.get(
-                    "network_id"
-                )
-
-                # Add network info to hostvars
-                if network:
-                    hostvars["network"] = network
-                if network_id:
-                    hostvars["network_id"] = network_id
-
-                if vlan:
-                    hostvars["vlan"] = vlan
-                    # Add VLAN name if we have it
-                    vlan_name = vlan_names.get(vlan)
-                    if vlan_name:
-                        hostvars["vlan_name"] = vlan_name
-
-                # Add OUI/manufacturer if available
-                oui = getattr(client, "oui", None)
-                if oui:
-                    hostvars["oui"] = oui
-
-                # Build groups
-                groups = ["unifi_clients"]
-                if is_wired:
-                    groups.append("unifi_wired_clients")
-                else:
-                    groups.append("unifi_wireless_clients")
-                    ssid = hostvars.get("ssid")
-                    if ssid:
-                        groups.append(f"ssid_{sanitize_group_name(ssid)}")
-
-                # Add network-based groups
-                if network:
-                    groups.append(f"network_{sanitize_group_name(network)}")
-
-                if vlan:
-                    # Add both VLAN ID group and VLAN name group
-                    groups.append(f"vlan_{vlan}")
-                    vlan_name = vlan_names.get(vlan)
-                    if vlan_name:
-                        groups.append(f"vlan_{sanitize_group_name(vlan_name)}")
-
-                # Add host to inventory
-                self._add_host_to_inventory(inventory, hostname, hostvars, groups)
-
-            # Process devices if requested
-            if self.include_devices:
-                for mac, device in controller.devices._items.items():
-                    # Determine hostname
-                    hostname = getattr(device, "name", None)
-                    if not hostname:
-                        model = getattr(device, "model", "device")
-                        hostname = f"{model}_{mac[-8:]}"
-
-                    # Replace spaces with underscores for Ansible compatibility
-                    if hostname:
-                        hostname = hostname.replace(" ", "_")
-
-                    # Get management IP
-                    ip = getattr(device, "ip", None)
-                    if not ip:
-                        continue
-
-                    # Get device info
-                    dev_type = getattr(device, "type", "unknown")
-                    model = getattr(device, "model", "unknown")
-                    firmware = getattr(device, "version", "unknown")
-                    adopted = getattr(device, "adopted", False)
-                    state = getattr(device, "state", "unknown")
-
-                    # Build hostvars
-                    hostvars = {
-                        "ansible_host": ip,
-                        "mac": mac,
-                        "ip": ip,
-                        "model": model,
-                        "type": dev_type,
-                        "firmware_version": firmware,
-                        "site": self.site,
-                        "adopted": adopted,
-                        "state": state,
-                    }
-
-                    # Build groups
-                    groups = ["unifi_devices"]
-                    type_group = sanitize_group_name(f"unifi_{dev_type}")
-                    groups.append(type_group)
-
-                    # Add host to inventory
-                    self._add_host_to_inventory(inventory, hostname, hostvars, groups)
+            if self.get_option("include_devices"):
+                for mac, device in _iter_handler_items(controller.devices):
+                    host = self._build_device_host(mac, device)
+                    if host is not None:
+                        hosts.append(host)
 
         except AiounifiException as e:
             raise AnsibleError(f"UniFi API error: {e}")
@@ -525,23 +604,4 @@ class InventoryModule(BaseInventoryPlugin, Cacheable):
         finally:
             await session.close()
 
-        return inventory
-
-    def _add_host_to_inventory(
-        self,
-        inventory: Dict[str, Any],
-        hostname: str,
-        hostvars: Dict[str, Any],
-        groups: List[str],
-    ) -> None:
-        """Add a host to inventory data structure"""
-        if hostname not in inventory["all"]["hosts"]:
-            inventory["all"]["hosts"].append(hostname)
-
-        inventory["_meta"]["hostvars"][hostname] = hostvars
-
-        for group in groups:
-            if group not in inventory:
-                inventory[group] = {"hosts": []}
-            if hostname not in inventory[group]["hosts"]:
-                inventory[group]["hosts"].append(hostname)
+        return hosts

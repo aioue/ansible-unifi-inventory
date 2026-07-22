@@ -31,6 +31,8 @@ ENV/
 .tox/
 .coverage
 htmlcov/
+tests/_ansible_collections/
+.venv/
 
 # Distribution / packaging
 dist/

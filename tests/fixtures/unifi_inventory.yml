@@ -1,0 +1,7 @@
+plugin: aioue.network.unifi
+url: https://192.168.1.1
+token: test-token
+verify_ssl: false
+site: default
+include_devices: false
+last_seen_minutes: 30

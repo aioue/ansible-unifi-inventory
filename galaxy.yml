@@ -8,7 +8,7 @@ namespace: aioue
 name: network
 
 # The version of the collection. Must be compatible with semantic versioning
-version: 1.0.0
+version: 1.1.0
 
 # The path to the Markdown (.md) readme file. This path is relative to the root of the collection
 readme: README.md
@@ -22,8 +22,8 @@ authors:
 ### OPTIONAL but strongly recommended
 # A short summary description of the collection
 description: >-
-  Discovers UniFi clients and optionally devices from a UniFi OS
-  controller and provides them as Ansible inventory.
+  Ansible inventory plugin that discovers UniFi OS clients and optionally
+  infrastructure devices from a UniFi controller.
 
 # Either a single license or a list of licenses for content inside of a collection. Ansible Galaxy currently only
 # accepts L(SPDX,https://spdx.org/licenses/) licenses. This key is mutually exclusive with 'license_file'
@@ -35,13 +35,15 @@ license:
 tags:
   - unifi
   - inventory
-  - network
+  - networking
+  - ubiquiti
 
 # Collections that this collection requires to be installed for it to be usable. The key of the dict is the
 # collection label 'namespace.name'. The value is a version range
 # L(specifiers,https://python-semanticversion.readthedocs.io/en/latest/#requirement-specification). Multiple version
-# range specifiers can be set and are separated by ','
-dependencies: {}
+# range specifiers can be separated by ','
+dependencies:
+  community.library_inventory_filtering_v1: ">=1.0.0"
 
 # The URL of the originating SCM repository
 repository: https://github.com/aioue/ansible-unifi-inventory
@@ -62,6 +64,10 @@ issues: https://github.com/aioue/ansible-unifi-inventory/issues
 build_ignore:
   - ansible.cfg.example
   - '*.tar.gz'
+  - dist
+  - .pytest_cache
+  - .venv
+  - tests/_ansible_collections
 
 # A dict controlling use of manifest directives used in building the collection artifact. The key 'directives' is a
 # list of MANIFEST.in style
