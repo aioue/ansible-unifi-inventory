@@ -60,102 +60,231 @@ $ ansible-inventory -i inventory/unifi.yaml all --graph
   |  |--Dream_Machine
 ```
 
-Example host variables (`include_devices: true`; sanitized from a live run with aiounifi v92):
+Example host variables (`include_devices: true`; all fields from a live run with aiounifi v92, identifying values sanitized):
 
 ```shell
 $ ansible-inventory -i inventory/unifi.yaml --host Kitchen_Echo
 {
   "ansible_host": "192.168.30.13",
-  "ip": "192.168.30.13",
-  "mac": "48:78:5e:fa:7c:e1",
-  "is_wired": false,
-  "ssid": "home.iot",
-  "vlan": 30,
-  "vlan_name": "IoT",
-  "network": "IoT",
-  "fixed_ip": "192.168.30.13",
-  "powersave_enabled": true,
-  "first_seen": 1735624765,
   "association_time": 1783656843,
+  "first_seen": 1735624765,
+  "fixed_ip": "192.168.30.13",
+  "ip": "192.168.30.13",
+  "ipv4": "192.168.30.13",
+  "ipv6": "2001:db8:1::772",
+  "ipv6_addresses": [
+    "2001:db8:1::772",
+    "fe80::4a78:5eff:fefa:7ce1"
+  ],
+  "is_wired": false,
+  "last_seen_iso": "2026-07-22T18:33:32Z",
+  "last_seen_unix": 1784745212,
+  "latest_association_time": 1784294898,
+  "mac": "48:78:5e:fa:7c:e1",
+  "network": "IoT",
+  "network_id": "670ef99bba911339bf2b894c",
   "oui": "Amazon Technologies Inc.",
-  "last_seen_iso": "2026-07-22T18:31:41Z",
-  "unifi_name": "Kitchen Echo"
+  "powersave_enabled": false,
+  "site": "default",
+  "ssid": "home.iot",
+  "unifi_name": "Kitchen Echo",
+  "vlan": 30,
+  "vlan_name": "IoT"
 }
 
 $ ansible-inventory -i inventory/unifi.yaml --host nas-server
 {
   "ansible_host": "192.168.1.148",
+  "association_time": 1781365738,
+  "first_seen": 1773981600,
   "ip": "192.168.1.148",
-  "mac": "bc:24:11:af:77:dd",
+  "ipv4": "192.168.1.148",
+  "ipv6": "fe80::be24:11ff:feaf:77dd",
   "is_wired": true,
+  "last_seen_iso": "2026-07-22T18:33:42Z",
+  "last_seen_unix": 1784745222,
+  "latest_association_time": 1781925104,
+  "mac": "bc:24:11:af:77:dd",
   "network": "Default",
-  "unifi_hostname": "nas-server",
-  "switch_depth": 1,
-  "wired_rate_mbps": 1000,
+  "network_id": "670ed85d2ce59e0ea329eff1",
   "oui": "Example Vendor Inc.",
-  "last_seen_iso": "2026-07-22T18:31:44Z",
-  "unifi_name": "nas-server"
+  "site": "default",
+  "switch_depth": 1,
+  "unifi_hostname": "nas-server",
+  "unifi_name": "nas-server",
+  "wired_rate_mbps": 1000
 }
 
 $ ansible-inventory -i inventory/unifi.yaml --host U6_Pro
 {
   "ansible_host": "192.168.1.252",
-  "ip": "192.168.1.252",
-  "mac": "ac:8b:a9:43:b5:cd",
-  "model": "UAP6MP",
-  "type": "uap",
-  "firmware_version": "6.8.2.15592",
-  "device_id": "671113bfba911339bf2be6c8",
-  "state": "CONNECTED",
   "client_count": 7,
-  "cpu_percent": "8.0",
-  "mem_percent": "65.7",
+  "cpu_percent": "7.9",
+  "device_id": "671113bfba911339bf2be6c8",
+  "disabled": false,
+  "firmware_version": "6.8.2.15592",
+  "has_fan": false,
+  "has_temperature": false,
+  "ip": "192.168.1.252",
+  "last_seen": 1784745212,
   "led_override": "off",
+  "led_override_color": "#0000ff",
+  "mac": "ac:8b:a9:43:b5:cd",
+  "mem_percent": "65.7",
+  "model": "UAP6MP",
+  "overheating": false,
+  "site": "default",
+  "state": "CONNECTED",
+  "supports_led_ring": false,
+  "system_uptime": "4768028",
+  "type": "uap",
+  "unifi_name": "U6 Pro",
+  "upgradable": false,
   "uplink": {
+    "full_duplex": true,
+    "max_speed": 1000,
+    "name": "eth0",
+    "port_idx": 1,
+    "speed": 1000,
     "type": "wire",
     "up": true,
-    "speed": 1000,
+    "uplink_device_name": "USW Ultra",
     "uplink_mac": "28:70:4e:6d:f9:32",
-    "uplink_device_name": "USW Ultra"
+    "uplink_remote_port": 1,
+    "uplink_source": "lldp_uplink"
   },
-  "unifi_name": "U6 Pro"
+  "uptime": 4768028
 }
 
 $ ansible-inventory -i inventory/unifi.yaml --host USW_Flex
 {
   "ansible_host": "192.168.1.231",
-  "type": "usw",
-  "model": "USWED37",
-  "state": "CONNECTED",
   "client_count": 5,
+  "cpu_percent": "11.0",
+  "device_id": "67d1d99d2b37f907a11a58ed",
+  "disabled": false,
+  "firmware_version": "2.1.8.971",
+  "has_fan": false,
+  "has_temperature": false,
+  "ip": "192.168.1.231",
+  "last_seen": 1784745222,
+  "led_override": "on",
+  "led_override_color": "#0000ff",
+  "mac": "94:2a:6f:fe:0e:e5",
+  "mem_percent": "82.8",
+  "model": "USWED37",
+  "overheating": false,
   "poe_ports": [
     {
-      "port_idx": 6,
+      "is_uplink": false,
+      "name": "Port 1",
+      "poe_enable": false,
+      "poe_good": false,
+      "poe_mode": "auto",
+      "poe_power": "0.00",
+      "poe_voltage": "0.00",
+      "port_idx": 1,
+      "up": false
+    },
+    {
+      "is_uplink": false,
+      "name": "Port 2",
+      "poe_enable": false,
+      "poe_good": false,
+      "poe_mode": "auto",
+      "poe_power": "0.00",
+      "poe_voltage": "0.00",
+      "port_idx": 2,
+      "up": false
+    },
+    {
+      "is_uplink": false,
+      "name": "Port 3",
+      "poe_enable": false,
+      "poe_good": false,
+      "poe_mode": "auto",
+      "poe_power": "0.00",
+      "poe_voltage": "0.00",
+      "port_idx": 3,
+      "up": false
+    },
+    {
+      "is_uplink": false,
+      "name": "Port 4",
+      "poe_enable": false,
+      "poe_good": false,
+      "poe_mode": "auto",
+      "poe_power": "0.00",
+      "poe_voltage": "0.00",
+      "port_idx": 4,
+      "up": true
+    },
+    {
+      "is_uplink": false,
+      "name": "Port 5",
+      "poe_enable": false,
+      "poe_good": false,
+      "poe_mode": "auto",
+      "poe_power": "0.00",
+      "poe_voltage": "0.00",
+      "port_idx": 5,
+      "up": true
+    },
+    {
+      "is_uplink": false,
       "name": "Port 6",
-      "up": true,
       "poe_enable": true,
+      "poe_good": true,
       "poe_mode": "auto",
       "poe_power": "5.91",
       "poe_voltage": "47.24",
-      "poe_good": true
+      "port_idx": 6,
+      "up": true
     },
     {
-      "port_idx": 7,
+      "is_uplink": false,
       "name": "Port 7",
-      "up": true,
       "poe_enable": true,
+      "poe_good": true,
       "poe_mode": "auto",
-      "poe_power": "13.50",
+      "poe_power": "13.60",
       "poe_voltage": "47.05",
-      "poe_good": true
+      "port_idx": 7,
+      "up": true
+    },
+    {
+      "is_uplink": false,
+      "name": "Port 8",
+      "poe_enable": false,
+      "poe_good": false,
+      "poe_mode": "auto",
+      "poe_power": "0.00",
+      "poe_voltage": "0.00",
+      "port_idx": 8,
+      "up": false
     }
   ],
+  "site": "default",
+  "state": "CONNECTED",
+  "supports_led_ring": false,
+  "type": "usw",
+  "unifi_name": "USW Flex 2.5G 8 PoE",
+  "upgradable": false,
   "uplink": {
-    "type": "wire",
+    "full_duplex": true,
+    "max_speed": 10000,
+    "media": "10GE",
+    "name": "eth0",
+    "port_idx": 9,
     "speed": 2500,
-    "uplink_device_name": "Dream Machine"
+    "type": "wire",
+    "up": true,
+    "uplink_device_name": "Dream Machine",
+    "uplink_mac": "28:70:4e:6e:44:a7",
+    "uplink_remote_port": 4,
+    "uplink_source": "lldp_uplink"
   },
-  "unifi_name": "USW Flex 2.5G 8 PoE"
+  "uptime": 4768031
 }
 ```
 
