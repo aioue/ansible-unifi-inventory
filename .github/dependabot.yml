@@ -1,0 +1,30 @@
+# Safe defaults: weekly checks, limited open PRs, grouped GitHub Actions bumps.
+# aiounifi uses bare integer PyPI versions - review those PRs manually before merging.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    allow:
+      - dependency-type: direct
+    ignore:
+      # aiounifi releases are integer-only; avoid noisy auto-bumps until reviewed
+      - dependency-name: aiounifi
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
