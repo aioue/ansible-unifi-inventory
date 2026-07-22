@@ -1,5 +1,5 @@
 # aiounifi uses bare integer PyPI versions (v91 adds SSO 2FA + rate-limit errors; v92 latest)
 aiounifi>=91.0.0
-aiohttp>=3.9.0
+aiohttp>=3.14.2
 PyYAML>=6.0.3
 pyotp>=2.9.0
