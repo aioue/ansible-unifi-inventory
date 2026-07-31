@@ -1,5 +1,6 @@
 # Copyright (c) 2025 Tom Paine (https://github.com/aioue)
 # GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 """
 UniFi Dynamic Ansible Inventory Plugin
@@ -17,6 +18,13 @@ __metaclass__ = type
 DOCUMENTATION = r"""
     name: unifi
     short_description: UniFi dynamic inventory plugin
+    author:
+        - Tom Paine (@aioue)
+        - Lenny Shirley (@lennysh)
+    requirements:
+        - aiounifi >= 91.0.0 (Python library)
+        - aiohttp >= 3.14.2 (Python library)
+        - pyotp >= 2.9.0 (Python library; required for O(totp_secret))
     description:
         - Discovers UniFi clients and optionally devices from a UniFi OS controller
         - Supports API token, username/password, and password with totp_secret (2FA / SSO)
@@ -63,18 +71,44 @@ DOCUMENTATION = r"""
             default: default
             env:
                 - name: UNIFI_SITE
-        verify_ssl:
-            description: Verify SSL certificates
+        validate_certs:
+            description: Verify SSL certificates when connecting to the UniFi controller.
             type: bool
             default: true
+            aliases:
+                - verify_ssl
             env:
+                - name: UNIFI_VALIDATE_CERTS
                 - name: UNIFI_VERIFY_SSL
+        api_timeout:
+            description: Timeout in seconds for UniFi API HTTP requests.
+            type: int
+            default: 30
+            version_added: 1.2.0
         include_devices:
             description: Include UniFi devices (APs, switches, gateways) in inventory
             type: bool
             default: false
             env:
                 - name: UNIFI_INCLUDE_DEVICES
+        exclude_clients:
+            description:
+                - Exclude UniFi clients from the inventory output.
+                - Skips the client API fetch when set to V(true).
+            type: bool
+            default: false
+            version_added: 1.2.0
+            env:
+                - name: UNIFI_EXCLUDE_CLIENTS
+        exclude_devices:
+            description:
+                - Exclude UniFi infrastructure devices even when O(include_devices) is V(true).
+                - Skips the device API fetch when set to V(true).
+            type: bool
+            default: false
+            version_added: 1.2.0
+            env:
+                - name: UNIFI_EXCLUDE_DEVICES
         last_seen_minutes:
             description: Only include clients seen within this many minutes
             type: int
@@ -120,7 +154,7 @@ url: https://192.168.1.1
 username: admin
 password: secret
 site: default
-verify_ssl: false
+validate_certs: false
 include_devices: false
 last_seen_minutes: 30
 cache: true
@@ -130,7 +164,7 @@ cache_timeout: 30
 plugin: aioue.network.unifi
 url: https://192.168.1.1
 token: your-api-token-here
-verify_ssl: false
+validate_certs: false
 cache: true
 cache_timeout: 30
 
@@ -140,7 +174,11 @@ url: https://192.168.1.1
 username: your-account
 password: secret
 totp_secret: BASE32-TOTP-SEED
-verify_ssl: false
+validate_certs: false
+
+# Clients only (skip infrastructure devices)
+# include_devices: true
+# exclude_devices: true
 
 # Optional: use MAC-based hostnames for stability when device names change
 # hostname: mac
@@ -156,6 +194,7 @@ import enum
 import inspect
 import logging
 import re
+import ssl
 import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -209,6 +248,25 @@ def mac_to_hostname(mac: str) -> str:
     return mac.replace(":", "-").lower()
 
 
+def aiohttp_connector_ssl(validate_certs: bool):
+    """Return the aiohttp C(TCPConnector) C(ssl=) value for TLS validation.
+
+    When validation is disabled, return C(False) explicitly so aiohttp does not
+    use the default SSL context, which can still verify certificates when
+    C(REQUESTS_CA_BUNDLE) or C(SSL_CERT_FILE) is set in the environment.
+    """
+    if validate_certs:
+        return None
+    return False
+
+
+def aiounifi_configuration_ssl_context(validate_certs: bool):
+    """Return aiounifi C(Configuration) C(ssl_context=) value."""
+    if validate_certs:
+        return ssl.create_default_context()
+    return False
+
+
 def _inventory_value(value: Any) -> Any:
     """Return a JSON-serializable value for Ansible inventory host variables."""
     if value is None or isinstance(value, bool):
@@ -231,9 +289,7 @@ def _inventory_value(value: Any) -> Any:
 
 def _login_rate_limit_message(error: Exception) -> Optional[str]:
     """Return a user-facing message when UniFi throttles authentication."""
-    if AuthenticationRateLimitError is not None and isinstance(
-        error, AuthenticationRateLimitError
-    ):
+    if AuthenticationRateLimitError is not None and isinstance(error, AuthenticationRateLimitError):
         return (
             "UniFi login rate limit reached. Wait before retrying, use token "
             "authentication, or increase inventory cache_timeout."
@@ -322,9 +378,7 @@ def _build_outlets(device: Any) -> List[Dict[str, Any]]:
     return _inventory_value(outlets)
 
 
-def _set_optional_hostvar(
-    hostvars: Dict[str, Any], key: str, value: Any
-) -> None:
+def _set_optional_hostvar(hostvars: Dict[str, Any], key: str, value: Any) -> None:
     """Set a host variable when the source value is present."""
     if value is None:
         return
@@ -375,7 +429,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
     def verify_file(self, path):
         """Verify that the inventory file is valid for this plugin."""
-        if not super(InventoryModule, self).verify_file(path):
+        if not super().verify_file(path):
             return False
 
         if path.endswith((".unifi.yaml", ".unifi.yml", "unifi.yaml", "unifi.yml")):
@@ -384,7 +438,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         try:
             import yaml
 
-            with open(path, "r") as f:
+            with open(path) as f:
                 data = yaml.safe_load(f)
             return isinstance(data, dict) and data.get("plugin") in VALID_PLUGIN_NAMES
         except Exception:
@@ -392,7 +446,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
     def parse(self, inventory, loader, path, cache=True):
         """Parse inventory from UniFi controller."""
-        super(InventoryModule, self).parse(inventory, loader, path, cache)
+        super().parse(inventory, loader, path, cache)
 
         if not HAS_AIOUNIFI:
             raise AnsibleError(
@@ -414,9 +468,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             raise AnsibleError("UniFi controller URL is required")
 
         if not self.token and not (self.username and self.password):
-            raise AnsibleError(
-                "Authentication required: provide token or username+password"
-            )
+            raise AnsibleError("Authentication required: provide token or username+password")
 
         cache_key = self.get_cache_key(path)
         user_cache_setting = self.get_option("cache")
@@ -447,6 +499,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
     def _run_async(self, coro):
         """Run a coroutine in a dedicated thread with its own event loop."""
+
         def _target():
             loop = asyncio.new_event_loop()
             try:
@@ -459,9 +512,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             return executor.submit(_target).result()
 
-    def _resolve_client_hostname(
-        self, mac: str, client: Any, mode: str
-    ) -> Tuple[str, Optional[str]]:
+    def _resolve_client_hostname(self, mac: str, client: Any, mode: str) -> Tuple[str, Optional[str]]:
         """Return inventory hostname and optional original UniFi name."""
         friendly = (
             getattr(client, "name", None)
@@ -483,9 +534,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
         return sanitize_hostname(friendly), friendly
 
-    def _resolve_device_hostname(
-        self, mac: str, device: Any, mode: str
-    ) -> Tuple[str, Optional[str]]:
+    def _resolve_device_hostname(self, mac: str, device: Any, mode: str) -> Tuple[str, Optional[str]]:
         """Return inventory hostname and optional original UniFi name."""
         name = getattr(device, "name", None)
 
@@ -543,9 +592,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             "is_wired": is_wired,
             "site": self.get_option("site"),
             "last_seen_unix": int(last_seen),
-            "last_seen_iso": time.strftime(
-                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(last_seen)
-            ),
+            "last_seen_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(last_seen)),
         }
 
         if unifi_name is not None:
@@ -576,9 +623,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
         vlan = getattr(client, "vlan", None) or client.raw.get("vlan")
         network = getattr(client, "network", None) or client.raw.get("network")
-        network_id = getattr(client, "network_id", None) or client.raw.get(
-            "network_id"
-        )
+        network_id = getattr(client, "network_id", None) or client.raw.get("network_id")
 
         if network:
             hostvars["network"] = network
@@ -604,34 +649,20 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             hostvars["firmware_version"] = firmware_version
 
         _set_optional_hostvar(hostvars, "fixed_ip", getattr(client, "fixed_ip", None))
-        _set_optional_hostvar(
-            hostvars, "unifi_hostname", getattr(client, "hostname", None)
-        )
-        _set_optional_hostvar(
-            hostvars, "device_name", getattr(client, "device_name", None)
-        )
-        _set_optional_hostvar(
-            hostvars, "first_seen", getattr(client, "first_seen", None)
-        )
-        _set_optional_hostvar(
-            hostvars, "association_time", getattr(client, "association_time", None)
-        )
+        _set_optional_hostvar(hostvars, "unifi_hostname", getattr(client, "hostname", None))
+        _set_optional_hostvar(hostvars, "device_name", getattr(client, "device_name", None))
+        _set_optional_hostvar(hostvars, "first_seen", getattr(client, "first_seen", None))
+        _set_optional_hostvar(hostvars, "association_time", getattr(client, "association_time", None))
         _set_optional_hostvar(
             hostvars,
             "latest_association_time",
             getattr(client, "latest_association_time", None),
         )
         if is_wired:
-            _set_optional_hostvar(
-                hostvars, "switch_depth", getattr(client, "switch_depth", None)
-            )
-            _set_optional_hostvar(
-                hostvars, "wired_rate_mbps", getattr(client, "wired_rate_mbps", None)
-            )
+            _set_optional_hostvar(hostvars, "switch_depth", getattr(client, "switch_depth", None))
+            _set_optional_hostvar(hostvars, "wired_rate_mbps", getattr(client, "wired_rate_mbps", None))
         else:
-            _set_optional_hostvar(
-                hostvars, "powersave_enabled", getattr(client, "powersave_enabled", None)
-            )
+            _set_optional_hostvar(hostvars, "powersave_enabled", getattr(client, "powersave_enabled", None))
 
         groups = ["unifi_clients"]
         if is_wired:
@@ -680,37 +711,23 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         _set_optional_hostvar(hostvars, "state", getattr(device, "state", None))
         _set_optional_hostvar(hostvars, "adopted", getattr(device, "adopted", None))
         _set_optional_hostvar(hostvars, "upgradable", getattr(device, "upgradable", None))
-        _set_optional_hostvar(
-            hostvars, "upgrade_to_firmware", getattr(device, "upgrade_to_firmware", None)
-        )
+        _set_optional_hostvar(hostvars, "upgrade_to_firmware", getattr(device, "upgrade_to_firmware", None))
         _set_optional_hostvar(hostvars, "overheating", getattr(device, "overheating", None))
         _set_optional_hostvar(hostvars, "disabled", getattr(device, "disabled", None))
         _set_optional_hostvar(hostvars, "uptime", getattr(device, "uptime", None))
-        _set_optional_hostvar(
-            hostvars, "uplink_depth", getattr(device, "uplink_depth", None)
-        )
-        _set_optional_hostvar(
-            hostvars, "client_count", getattr(device, "user_num_sta", None)
-        )
+        _set_optional_hostvar(hostvars, "uplink_depth", getattr(device, "uplink_depth", None))
+        _set_optional_hostvar(hostvars, "client_count", getattr(device, "user_num_sta", None))
         uplink = getattr(device, "uplink", None)
         if uplink:
             hostvars["uplink"] = _summarize_uplink(uplink)
 
-        _set_optional_hostvar(
-            hostvars, "general_temperature", getattr(device, "general_temperature", None)
-        )
+        _set_optional_hostvar(hostvars, "general_temperature", getattr(device, "general_temperature", None))
         _set_optional_hostvar(hostvars, "fan_level", getattr(device, "fan_level", None))
         _set_optional_hostvar(hostvars, "has_fan", getattr(device, "has_fan", None))
-        _set_optional_hostvar(
-            hostvars, "has_temperature", getattr(device, "has_temperature", None)
-        )
+        _set_optional_hostvar(hostvars, "has_temperature", getattr(device, "has_temperature", None))
         _set_optional_hostvar(hostvars, "last_seen", getattr(device, "last_seen", None))
-        _set_optional_hostvar(
-            hostvars, "supports_led_ring", getattr(device, "supports_led_ring", None)
-        )
-        _set_optional_hostvar(
-            hostvars, "led_override", getattr(device, "led_override", None)
-        )
+        _set_optional_hostvar(hostvars, "supports_led_ring", getattr(device, "supports_led_ring", None))
+        _set_optional_hostvar(hostvars, "led_override", getattr(device, "led_override", None))
         _set_optional_hostvar(
             hostvars,
             "led_override_color",
@@ -760,10 +777,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
         for host_data in hosts:
             hostname = host_data["hostname"]
-            hostvars = {
-                key: _inventory_value(value)
-                for key, value in host_data["hostvars"].items()
-            }
+            hostvars = {key: _inventory_value(value) for key, value in host_data["hostvars"].items()}
             groups = host_data.get("groups", [])
 
             if not filter_host(self, hostname, hostvars, filters):
@@ -773,15 +787,9 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             for key, value in hostvars.items():
                 self.inventory.set_variable(hostname, key, value)
 
-            self._set_composite_vars(
-                self.get_option("compose"), hostvars, hostname, strict=strict
-            )
-            self._add_host_to_composed_groups(
-                self.get_option("groups"), hostvars, hostname, strict=strict
-            )
-            self._add_host_to_keyed_groups(
-                self.get_option("keyed_groups"), hostvars, hostname, strict=strict
-            )
+            self._set_composite_vars(self.get_option("compose"), hostvars, hostname, strict=strict)
+            self._add_host_to_composed_groups(self.get_option("groups"), hostvars, hostname, strict=strict)
+            self._add_host_to_keyed_groups(self.get_option("keyed_groups"), hostvars, hostname, strict=strict)
 
             for group_name in groups:
                 self.inventory.add_group(group_name)
@@ -792,13 +800,25 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         hosts: List[Dict[str, Any]] = []
 
         url = self.url
-        verify_ssl = self.get_option("verify_ssl")
-        ssl_context = False if not verify_ssl else True
+        validate_certs = self.get_option("validate_certs")
+        exclude_clients = self.get_option("exclude_clients")
+        include_devices = self.get_option("include_devices")
+        exclude_devices = self.get_option("exclude_devices")
+        fetch_clients = not exclude_clients
+        fetch_devices = include_devices and not exclude_devices
+        if not fetch_clients and not fetch_devices:
+            raise AnsibleError(
+                "Nothing to fetch from UniFi: enable clients or devices "
+                "(check exclude_clients, exclude_devices, and include_devices)."
+            )
 
-        connector = aiohttp.TCPConnector(
-            ssl=ssl_context if ssl_context is False else None
-        )
-        session = aiohttp.ClientSession(connector=connector)
+        aiohttp_ssl = aiohttp_connector_ssl(validate_certs)
+        aiounifi_ssl_context = aiounifi_configuration_ssl_context(validate_certs)
+        api_timeout = self.get_option("api_timeout")
+        timeout = aiohttp.ClientTimeout(total=api_timeout)
+
+        connector = aiohttp.TCPConnector(ssl=aiohttp_ssl)
+        session = aiohttp.ClientSession(connector=connector, timeout=timeout)
 
         try:
             token = self.token
@@ -824,11 +844,9 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 "password": self.password,
                 "port": port,
                 "site": self.get_option("site"),
-                "ssl_context": ssl_context,
+                "ssl_context": aiounifi_ssl_context,
             }
-            if self.totp_secret and "totp_secret" in inspect.signature(
-                Configuration
-            ).parameters:
+            if self.totp_secret and "totp_secret" in inspect.signature(Configuration).parameters:
                 config_kwargs["totp_secret"] = self.totp_secret
 
             config = Configuration(**config_kwargs)
@@ -841,9 +859,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 except LoginRequired:
                     raise AnsibleError("Authentication failed: check credentials")
                 except TwoFaTokenRequired:
-                    if self.totp_secret and "totp_secret" not in inspect.signature(
-                        Configuration
-                    ).parameters:
+                    if self.totp_secret and "totp_secret" not in inspect.signature(Configuration).parameters:
                         raise AnsibleError(
                             "2FA is required but installed aiounifi does not support "
                             "totp_secret yet. Upgrade aiounifi, use token authentication, "
@@ -860,8 +876,9 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                     raise AnsibleError(f"Controller error during login: {e}")
 
             try:
-                await controller.clients.update()
-                if self.get_option("include_devices"):
+                if fetch_clients:
+                    await controller.clients.update()
+                if fetch_devices:
                     await controller.devices.update()
             except (AiounifiException, ResponseError) as e:
                 if "403" in str(e) or "401" in str(e):
@@ -872,31 +889,29 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 raise AnsibleError(f"Failed to fetch data from controller: {e}")
 
             vlan_names: Dict[int, str] = {}
-            try:
-                network_request = ApiRequest(method="get", path="/rest/networkconf")
-                networks_response = await controller.request(network_request)
-                if networks_response and "data" in networks_response:
-                    for network in networks_response["data"]:
-                        vlan_id = network.get("vlan")
-                        name = network.get("name")
-                        if vlan_id and name:
-                            vlan_names[int(vlan_id)] = name
-            except Exception as e:
-                logger.warning(
-                    "Failed to fetch network configuration for VLAN names: %s", e
-                )
+            if fetch_clients:
+                try:
+                    network_request = ApiRequest(method="get", path="/rest/networkconf")
+                    networks_response = await controller.request(network_request)
+                    if networks_response and "data" in networks_response:
+                        for network in networks_response["data"]:
+                            vlan_id = network.get("vlan")
+                            name = network.get("name")
+                            if vlan_id and name:
+                                vlan_names[int(vlan_id)] = name
+                except Exception as e:
+                    logger.warning("Failed to fetch network configuration for VLAN names: %s", e)
 
             current_time = time.time()
             last_seen_threshold = self.get_option("last_seen_minutes") * 60
 
-            for mac, client in _iter_handler_items(controller.clients):
-                host = self._build_client_host(
-                    mac, client, vlan_names, current_time, last_seen_threshold
-                )
-                if host is not None:
-                    hosts.append(host)
+            if fetch_clients:
+                for mac, client in _iter_handler_items(controller.clients):
+                    host = self._build_client_host(mac, client, vlan_names, current_time, last_seen_threshold)
+                    if host is not None:
+                        hosts.append(host)
 
-            if self.get_option("include_devices"):
+            if fetch_devices:
                 for mac, device in _iter_handler_items(controller.devices):
                     host = self._build_device_host(mac, device)
                     if host is not None:

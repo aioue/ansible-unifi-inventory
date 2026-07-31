@@ -8,6 +8,7 @@ __pycache__/
 # Cache directories
 .cache/
 *.cache
+.ruff_cache/
 
 # Sensitive configuration files
 inventory.yaml
@@ -40,4 +41,5 @@ build/
 *.egg-info/
 *.tar.gz
 ansible_collections/
+.sanity-tree-path
 

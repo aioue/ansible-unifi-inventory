@@ -8,7 +8,7 @@ namespace: aioue
 name: network
 
 # The version of the collection. Must be compatible with semantic versioning
-version: 1.1.6
+version: 1.2.0
 
 # The path to the Markdown (.md) readme file. This path is relative to the root of the collection
 readme: README.md
@@ -68,6 +68,8 @@ build_ignore:
   - .pytest_cache
   - .venv
   - tests/_ansible_collections
+  - .sanity-tree-path
+  - .ruff_cache
 
 # A dict controlling use of manifest directives used in building the collection artifact. The key 'directives' is a
 # list of MANIFEST.in style

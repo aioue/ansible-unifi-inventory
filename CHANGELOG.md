@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.0 (2026-07-31)
+
+**Improvements:**
+
+- Add `validate_certs` inventory option (`verify_ssl` remains supported as an alias)
+- Add `api_timeout`, `exclude_clients`, and `exclude_devices` inventory options
+- `exclude_clients` / `exclude_devices` skip the corresponding UniFi API fetches
+- Run `ansible-test sanity` and Ruff on every pull request
+- Add `CONTRIBUTING.md`, `MAINTAINERS.md`, pre-commit hooks, and Ruff configuration
+
+**Fixes:**
+
+- Pass explicit aiohttp `ssl=False` when certificate validation is disabled so `REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE` in the environment cannot force verification anyway
+- Use `ssl.create_default_context()` for aiounifi when validation is enabled (instead of bare `True`)
+
 ## 1.1.6 (2026-07-22)
 
 **Fixes:**

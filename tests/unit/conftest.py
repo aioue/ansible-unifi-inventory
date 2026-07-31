@@ -19,10 +19,18 @@ def _add_collections_path(path: Path) -> None:
 
 def _ensure_collection_path() -> None:
     TARGET.parent.mkdir(parents=True, exist_ok=True)
-    if TARGET.exists() and not TARGET.is_symlink():
+    if TARGET.is_symlink():
+        try:
+            if TARGET.resolve() == COLLECTION_ROOT.resolve():
+                _add_collections_path(FAKE_COLLECTIONS)
+                os.environ["ANSIBLE_COLLECTIONS_PATH"] = str(FAKE_COLLECTIONS)
+                return
+        except OSError:
+            pass
+        TARGET.unlink()
+    if TARGET.exists():
         raise RuntimeError(f"Expected symlink at {TARGET}, found a real directory")
-    if not TARGET.exists():
-        TARGET.symlink_to(COLLECTION_ROOT, target_is_directory=True)
+    TARGET.symlink_to(COLLECTION_ROOT, target_is_directory=True)
 
     # Only expose the workspace collection. Do not add ~/.ansible/collections to
     # sys.path: ansible_collections is a namespace package and the installed

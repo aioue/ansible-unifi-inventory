@@ -21,10 +21,15 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ansible-core aiounifi aiohttp pytest
+          pip install ansible-core aiounifi aiohttp pytest ruff==0.11.12
           pip install -r tests/unit/requirements.txt
           ansible-galaxy collection install community.library_inventory_filtering_v1 \
             -p tests/_ansible_collections --force
+
+      - name: Ruff lint and format
+        run: |
+          ruff check .
+          ruff format --check .
 
       - name: Build and install collection
         run: |
@@ -34,3 +39,16 @@ jobs:
 
       - name: Run unit tests
         run: pytest tests/unit/ -q
+
+      - name: Prepare collection tree for ansible-test
+        run: |
+          SANITY_ROOT=$(mktemp -d)
+          export SANITY_ROOT
+          echo "SANITY_ROOT=$SANITY_ROOT" >> "$GITHUB_ENV"
+          bash ./.github/scripts/prepare-collection-tree.sh
+
+      - name: Run ansible-test sanity
+        working-directory: ${{ env.SANITY_ROOT }}/ansible_collections/aioue/network
+        env:
+          ANSIBLE_COLLECTIONS_PATH: ${{ env.SANITY_ROOT }}
+        run: ansible-test sanity --local --color no

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import enum
 import json
+import ssl
+import time
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from ansible.errors import AnsibleError
@@ -22,6 +24,8 @@ from ansible_collections.aioue.network.plugins.inventory.unifi import (
     _login_rate_limit_message,
     _set_optional_hostvar,
     _summarize_uplink,
+    aiohttp_connector_ssl,
+    aiounifi_configuration_ssl_context,
     mac_to_hostname,
     sanitize_group_name,
     sanitize_hostname,
@@ -54,6 +58,88 @@ def test_sanitize_hostname(raw: str, expected: str) -> None:
 
 def test_mac_to_hostname() -> None:
     assert mac_to_hostname("AA:BB:CC:DD:EE:FF") == "aa-bb-cc-dd-ee-ff"
+
+
+@pytest.mark.parametrize(
+    ("validate_certs", "expected"),
+    [
+        (True, None),
+        (False, False),
+    ],
+)
+def test_aiohttp_connector_ssl(validate_certs: bool, expected) -> None:
+    assert aiohttp_connector_ssl(validate_certs) is expected
+
+
+def test_aiohttp_connector_ssl_false_with_ca_bundle_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt")
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt")
+
+    assert aiohttp_connector_ssl(False) is False
+
+
+def test_aiounifi_configuration_ssl_context() -> None:
+    assert aiounifi_configuration_ssl_context(False) is False
+    enabled = aiounifi_configuration_ssl_context(True)
+    assert isinstance(enabled, ssl.SSLContext)
+
+
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.HAS_AIOUNIFI", True)
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.Controller")
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.aiohttp.ClientSession")
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.aiohttp.TCPConnector")
+def test_fetch_passes_ssl_false_to_tcp_connector_with_ca_bundle_env(
+    mock_tcp_connector: MagicMock,
+    mock_session_cls: MagicMock,
+    mock_controller_cls: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt")
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt")
+
+    connector_kwargs: dict[str, object] = {}
+
+    def capture_connector(**kwargs: object) -> MagicMock:
+        connector_kwargs.update(kwargs)
+        return MagicMock()
+
+    mock_tcp_connector.side_effect = capture_connector
+
+    plugin = InventoryModule()
+    plugin.url = "https://192.168.1.1"
+    plugin.username = ""
+    plugin.password = ""
+    plugin.token = "test-token"
+    plugin.totp_secret = ""
+
+    controller = mock_controller_cls.return_value
+    controller.clients = SimpleNamespace(items=lambda: [])
+    controller.devices = SimpleNamespace(items=lambda: [])
+    controller.clients.update = AsyncMock()
+    controller.devices.update = AsyncMock()
+    controller.request = AsyncMock(return_value={"data": []})
+
+    session = MagicMock()
+    session.close = AsyncMock()
+    session.cookie_jar.update_cookies = MagicMock()
+    mock_session_cls.return_value = session
+
+    options = {
+        "validate_certs": False,
+        "api_timeout": 30,
+        "site": "default",
+        "include_devices": True,
+        "exclude_clients": True,
+        "exclude_devices": False,
+        "last_seen_minutes": 30,
+        "hostname": "name",
+    }
+
+    with patch.object(plugin, "get_option", side_effect=options.get):
+        plugin._run_async(plugin._fetch_from_controller())
+
+    assert connector_kwargs.get("ssl") is False
+    controller.clients.update.assert_not_called()
 
 
 def test_inventory_value_serializes_enum() -> None:
@@ -177,7 +263,7 @@ def test_inventory_value_serializes_strenum() -> None:
     result = _inventory_value(DeviceType.ACCESS_POINT)
 
     assert result == "uap"
-    assert type(result) is str
+    assert isinstance(result, str)
     json.dumps(result)
 
 
@@ -566,13 +652,9 @@ def test_build_outlets_returns_empty_when_no_outlets() -> None:
 
 
 def test_iter_handler_items_prefers_items_callable() -> None:
-    handler = SimpleNamespace(
-        items=lambda: [("aa:bb:cc:dd:ee:01", SimpleNamespace(mac="aa:bb:cc:dd:ee:01"))]
-    )
+    handler = SimpleNamespace(items=lambda: [("aa:bb:cc:dd:ee:01", SimpleNamespace(mac="aa:bb:cc:dd:ee:01"))])
 
-    assert list(_iter_handler_items(handler)) == [
-        ("aa:bb:cc:dd:ee:01", handler.items()[0][1])
-    ]
+    assert list(_iter_handler_items(handler)) == [("aa:bb:cc:dd:ee:01", handler.items()[0][1])]
 
 
 def test_iter_handler_items_falls_back_to_private_items() -> None:
@@ -651,9 +733,7 @@ def test_build_device_host_includes_thermal_outlets_and_status_groups() -> None:
         last_seen=1_700_000_000,
         supports_led_ring=True,
         led_override="on",
-        outlet_table=[
-            {"index": 1, "name": "LAN", "relay_state": True, "cycle_enabled": False}
-        ],
+        outlet_table=[{"index": 1, "name": "LAN", "relay_state": True, "cycle_enabled": False}],
         uplink={"type": "wire", "speed": 1000, "uplink_device_name": "ISP"},
         port_table=[],
     )
@@ -712,3 +792,160 @@ def test_template_option_resolves_totp_secret() -> None:
 
     with patch.object(plugin, "get_option", return_value="{{ vault_totp }}"):
         assert plugin._template_option("totp_secret") == "totp-seed"
+
+
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.HAS_AIOUNIFI", True)
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.aiohttp.ClientSession")
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.Controller")
+def test_fetch_from_controller_respects_exclude_clients(
+    mock_controller_cls: MagicMock,
+    mock_session_cls: MagicMock,
+) -> None:
+    plugin = InventoryModule()
+    plugin.url = "https://192.168.1.1"
+    plugin.username = ""
+    plugin.password = ""
+    plugin.token = "test-token"
+    plugin.totp_secret = ""
+
+    recent_last_seen = int(time.time()) - 60
+
+    client = SimpleNamespace(
+        last_seen=recent_last_seen,
+        ip="192.168.1.20",
+        raw={"ip": "192.168.1.20"},
+        name="laptop",
+        is_wired=True,
+    )
+    device = SimpleNamespace(
+        ip="192.168.1.252",
+        name="Office AP",
+        type="uap",
+        model="U6",
+        version="1.0.0",
+        port_table=[],
+    )
+
+    controller = mock_controller_cls.return_value
+    controller.clients = SimpleNamespace(items=lambda: [("aa:bb:cc:dd:ee:01", client)])
+    controller.devices = SimpleNamespace(items=lambda: [("aa:bb:cc:dd:ee:02", device)])
+    controller.clients.update = AsyncMock()
+    controller.devices.update = AsyncMock()
+    controller.request = AsyncMock(return_value={"data": []})
+
+    session = MagicMock()
+    session.close = AsyncMock()
+    session.cookie_jar.update_cookies = MagicMock()
+    mock_session_cls.return_value = session
+
+    options = {
+        "validate_certs": False,
+        "api_timeout": 30,
+        "site": "default",
+        "include_devices": True,
+        "exclude_clients": True,
+        "exclude_devices": False,
+        "last_seen_minutes": 1440,
+        "hostname": "name",
+    }
+
+    with patch.object(plugin, "get_option", side_effect=options.get):
+        hosts = plugin._run_async(plugin._fetch_from_controller())
+
+    hostnames = [host["hostname"] for host in hosts]
+    assert "laptop" not in hostnames
+    assert "Office_AP" in hostnames
+    controller.clients.update.assert_not_called()
+    controller.devices.update.assert_called_once()
+    controller.request.assert_not_called()
+
+
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.HAS_AIOUNIFI", True)
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.aiohttp.ClientSession")
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.Controller")
+def test_fetch_from_controller_respects_exclude_devices(
+    mock_controller_cls: MagicMock,
+    mock_session_cls: MagicMock,
+) -> None:
+    plugin = InventoryModule()
+    plugin.url = "https://192.168.1.1"
+    plugin.username = ""
+    plugin.password = ""
+    plugin.token = "test-token"
+    plugin.totp_secret = ""
+
+    recent_last_seen = int(time.time()) - 60
+
+    client = SimpleNamespace(
+        last_seen=recent_last_seen,
+        ip="192.168.1.20",
+        raw={"ip": "192.168.1.20"},
+        name="laptop",
+        is_wired=True,
+    )
+    device = SimpleNamespace(
+        ip="192.168.1.252",
+        name="Office AP",
+        type="uap",
+        model="U6",
+        version="1.0.0",
+        port_table=[],
+    )
+
+    controller = mock_controller_cls.return_value
+    controller.clients = SimpleNamespace(items=lambda: [("aa:bb:cc:dd:ee:01", client)])
+    controller.devices = SimpleNamespace(items=lambda: [("aa:bb:cc:dd:ee:02", device)])
+    controller.clients.update = AsyncMock()
+    controller.devices.update = AsyncMock()
+    controller.request = AsyncMock(return_value={"data": []})
+
+    session = MagicMock()
+    session.close = AsyncMock()
+    session.cookie_jar.update_cookies = MagicMock()
+    mock_session_cls.return_value = session
+
+    options = {
+        "validate_certs": False,
+        "api_timeout": 30,
+        "site": "default",
+        "include_devices": True,
+        "exclude_clients": False,
+        "exclude_devices": True,
+        "last_seen_minutes": 1440,
+        "hostname": "name",
+    }
+
+    with patch.object(plugin, "get_option", side_effect=options.get):
+        hosts = plugin._run_async(plugin._fetch_from_controller())
+
+    hostnames = [host["hostname"] for host in hosts]
+    assert "laptop" in hostnames
+    assert "Office_AP" not in hostnames
+    controller.clients.update.assert_called_once()
+    controller.devices.update.assert_not_called()
+    controller.request.assert_called_once()
+
+
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.HAS_AIOUNIFI", True)
+def test_fetch_from_controller_rejects_empty_fetch_selection() -> None:
+    plugin = InventoryModule()
+    plugin.url = "https://192.168.1.1"
+    plugin.username = ""
+    plugin.password = ""
+    plugin.token = "test-token"
+    plugin.totp_secret = ""
+
+    options = {
+        "validate_certs": True,
+        "api_timeout": 30,
+        "site": "default",
+        "include_devices": False,
+        "exclude_clients": True,
+        "exclude_devices": False,
+        "last_seen_minutes": 30,
+        "hostname": "name",
+    }
+
+    with patch.object(plugin, "get_option", side_effect=options.get):
+        with pytest.raises(AnsibleError, match="Nothing to fetch"):
+            plugin._run_async(plugin._fetch_from_controller())

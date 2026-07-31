@@ -1,0 +1,23 @@
+line-length = 120
+target-version = "py39"
+
+[lint]
+select = ["E", "F", "I", "UP", "SIM"]
+ignore = [
+    "E402",
+    "SIM105",
+    "SIM108",
+]
+
+[lint.isort]
+known-first-party = ["ansible_collections.aioue.network"]
+
+[lint.per-file-ignores]
+# Legacy inventory plugin; avoid large typing-only refactors in this pass.
+"plugins/inventory/unifi.py" = ["UP001", "UP006", "UP010", "UP035", "E501"]
+"tests/**" = ["SIM117"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
