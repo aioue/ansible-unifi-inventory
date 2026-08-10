@@ -1,5 +1,6 @@
 # Safe defaults: weekly checks, limited open PRs, grouped GitHub Actions bumps.
 # aiounifi uses bare integer PyPI versions - review those PRs manually before merging.
+# Security updates are separate: not delayed by schedule, groups, or cooldown.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -7,18 +8,33 @@ updates:
     schedule:
       interval: weekly
       day: monday
+      time: "09:00"
+      timezone: Etc/UTC
     open-pull-requests-limit: 5
+    rebase-strategy: auto
+    labels:
+      - dependencies
+      - github-actions
     groups:
       github-actions:
         patterns:
           - "*"
+    commit-message:
+      prefix: chore
+      include: scope
 
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
       day: monday
+      time: "09:00"
+      timezone: Etc/UTC
     open-pull-requests-limit: 5
+    rebase-strategy: auto
+    labels:
+      - dependencies
+      - python
     allow:
       - dependency-type: direct
     ignore:
@@ -28,3 +44,22 @@ updates:
           - version-update:semver-major
           - version-update:semver-minor
           - version-update:semver-patch
+    commit-message:
+      prefix: chore
+      include: scope
+
+  - package-ecosystem: pip
+    directory: /tests/unit
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    labels:
+      - dependencies
+      - python
+    commit-message:
+      prefix: chore
+      include: scope
