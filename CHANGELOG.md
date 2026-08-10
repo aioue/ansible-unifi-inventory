@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.1 (2026-08-10)
+
+**Maintenance:**
+
+- Enable Dependabot for GitHub Actions and pip dependencies
+- Auto-merge eligible Dependabot and CodeQL security fix pull requests after CI
+- Restrict CI workflow `GITHUB_TOKEN` permissions (CodeQL compliance)
+- Publish GitHub Release notes from matching `CHANGELOG.md` sections
+- Validate `galaxy.yml` version matches the release tag in the release workflow
+
+**Documentation:**
+
+- Add CodeQL and Dependabot status badges to README
+
 ## 1.2.0 (2026-07-31)
 
 **Improvements:**
