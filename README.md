@@ -848,7 +848,7 @@ If you copied `unifi.py` into a local plugins directory:
 ## Releasing a New Version
 
 1. Bump `version:` in `galaxy.yml`
-2. Update `CHANGELOG.md`
+2. Update `CHANGELOG.md` (the matching version section is published automatically as the GitHub Release notes)
 3. Commit, tag, and push:
 
 ```bash
@@ -856,7 +856,7 @@ git tag v1.x.x
 git push origin v1.x.x
 ```
 
-The GitHub Actions workflow builds the collection, publishes to Ansible Galaxy, and creates a GitHub Release.
+The GitHub Actions workflow builds the collection, publishes to Ansible Galaxy, and creates a GitHub Release from the `CHANGELOG.md` entry for that version.
 
 ## Contributing
 

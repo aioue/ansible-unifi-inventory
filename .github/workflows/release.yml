@@ -13,6 +13,27 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          ver="${tag#v}"
+          {
+            echo "name=${tag}"
+            echo "ver=${ver}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate collection version
+        run: |
+          expected="${{ steps.tag.outputs.ver }}"
+          actual="$(awk '/^version: / { print $2; exit }' galaxy.yml)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::galaxy.yml version (${actual}) does not match tag v${expected}"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -56,8 +77,15 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: ansible-galaxy collection publish dist/*.tar.gz --token "${{ secrets.GALAXY_API_TOKEN }}"
 
+      - name: Build release notes from CHANGELOG
+        id: notes
+        run: |
+          bash ./.github/scripts/extract-changelog.sh "${{ steps.tag.outputs.ver }}" > release-notes.md
+          echo "body_file=${GITHUB_WORKSPACE}/release-notes.md" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: dist/*.tar.gz
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.body_file }}
+          generate_release_notes: false
