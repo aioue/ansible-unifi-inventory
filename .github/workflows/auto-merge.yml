@@ -1,0 +1,117 @@
+# Queue auto-merge for trusted dependency and security fix PRs once CI passes.
+#
+# Uses pull_request_target so GITHUB_TOKEN can enable auto-merge. Safe here:
+# the workflow only reads Dependabot metadata and calls `gh pr`; it never
+# checks out or executes code from the PR branch.
+#
+# Eligibility:
+#   Dependabot: patch bumps; security advisories at minor; github-actions non-major
+#   Code scanning autofix: copilot-swe-agent[bot] PRs that fix CodeQL alerts
+name: Auto-merge
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  dependabot:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2.4.0
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Decide auto-merge eligibility
+        id: decide
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          DEP_NAMES: ${{ steps.meta.outputs.dependency-names }}
+          GHSA_IDS: ${{ steps.meta.outputs.ghsa-ids }}
+          DEPENDENCY_GROUP: ${{ steps.meta.outputs.dependency-group }}
+        run: |
+          IS_SECURITY=false
+          if [ -n "$GHSA_IDS" ]; then
+            IS_SECURITY=true
+          fi
+
+          ELIGIBLE=false
+          REASON="not eligible"
+
+          case "$UPDATE_TYPE" in
+            version-update:semver-patch)
+              ELIGIBLE=true
+              REASON="patch update"
+              ;;
+            version-update:semver-minor)
+              if [ "$IS_SECURITY" = "true" ]; then
+                ELIGIBLE=true
+                REASON="security update (minor) — advisory: $GHSA_IDS"
+              elif [ "$DEPENDENCY_GROUP" = "github-actions" ]; then
+                ELIGIBLE=true
+                REASON="github-actions minor update"
+              else
+                REASON="non-security minor update — human review required"
+              fi
+              ;;
+            version-update:semver-major)
+              if [ "$DEPENDENCY_GROUP" = "github-actions" ]; then
+                REASON="github-actions major update — human review required"
+              else
+                REASON="major update — human review required"
+              fi
+              ;;
+            *)
+              if [ "$DEPENDENCY_GROUP" = "github-actions" ]; then
+                ELIGIBLE=true
+                REASON="github-actions grouped update"
+              elif [ "$IS_SECURITY" = "true" ]; then
+                ELIGIBLE=true
+                REASON="security update — advisory: $GHSA_IDS"
+              fi
+              ;;
+          esac
+
+          echo "eligible=$ELIGIBLE" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Dependabot auto-merge decision"
+            echo "- **update-type**: ${UPDATE_TYPE:-unknown}"
+            echo "- **dependencies**: ${DEP_NAMES:-unknown}"
+            echo "- **dependency-group**: ${DEPENDENCY_GROUP:-none}"
+            echo "- **security-update**: $IS_SECURITY"
+            echo "- **eligible**: $ELIGIBLE"
+            echo "- **reason**: $REASON"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enable auto-merge
+        if: steps.decide.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --merge --delete-branch "$PR_URL"
+
+  code-scanning-autofix:
+    if: >-
+      github.actor == 'copilot-swe-agent[bot]' &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable auto-merge for CodeQL autofix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          echo "## Code scanning autofix auto-merge" >> "$GITHUB_STEP_SUMMARY"
+          echo "Queued merge after CI for ${PR_URL}" >> "$GITHUB_STEP_SUMMARY"
+          gh pr merge --auto --merge --delete-branch "$PR_URL"
