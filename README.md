@@ -1,9 +1,11 @@
-# aioue.network
-
 [![CI](https://github.com/aioue/ansible-unifi-inventory/actions/workflows/ci.yml/badge.svg)](https://github.com/aioue/ansible-unifi-inventory/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/aioue/ansible-unifi-inventory/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/aioue/ansible-unifi-inventory/security/code-scanning)
+[![Dependabot enabled](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot&logoColor=white)](https://github.com/aioue/ansible-unifi-inventory/network/updates)
 [![Galaxy](https://img.shields.io/ansible/collection/v/aioue/network)](https://galaxy.ansible.com/ui/repo/published/aioue/network/)
 [![Release](https://img.shields.io/github/v/release/aioue/ansible-unifi-inventory)](https://github.com/aioue/ansible-unifi-inventory/releases)
 [![License](https://img.shields.io/github/license/aioue/ansible-unifi-inventory)](LICENSE)
+
+# aioue.network
 
 Dynamic inventory plugin for Ansible that discovers hosts from a UniFi OS controller (UDM, UCG, etc.). Built on top of [aiounifi](https://github.com/Kane610/aiounifi) (v91+ required; tested with [v92](https://github.com/Kane610/aiounifi/releases/tag/v92)).
 
