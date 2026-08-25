@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2 (2026-08-25)
+
+**Fixes:**
+
+- Use UniFi `last_ip` then `fixed_ip` when a client has no `ip` field, so DHCP-reserved wired hosts still get `ansible_host`
+
 ## 1.2.1 (2026-08-10)
 
 **Maintenance:**

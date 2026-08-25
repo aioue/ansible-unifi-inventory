@@ -563,7 +563,15 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         hostname_mode = self.get_option("hostname")
         hostname, unifi_name = self._resolve_client_hostname(mac, client, hostname_mode)
 
-        ipv4 = getattr(client, "ip", None) or client.raw.get("ip")
+        # UniFi omits plain ip for some DHCP-reserved wired clients; last_ip/fixed_ip remain.
+        raw = getattr(client, "raw", None) or {}
+        ipv4 = (
+            getattr(client, "ip", None)
+            or raw.get("ip")
+            or raw.get("last_ip")
+            or getattr(client, "fixed_ip", None)
+            or raw.get("fixed_ip")
+        )
 
         ipv6_addresses = client.raw.get("ipv6_addresses", [])
         ipv6 = None

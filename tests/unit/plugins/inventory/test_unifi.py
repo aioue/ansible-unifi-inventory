@@ -685,6 +685,186 @@ def test_build_client_host_skips_stale_clients() -> None:
     assert host is None
 
 
+@pytest.mark.parametrize(
+    ("raw", "client_ip"),
+    [
+        ({"last_ip": "192.168.1.10"}, None),
+        ({"fixed_ip": "192.168.1.10"}, None),
+        ({"ip": "", "last_ip": "192.168.1.10"}, ""),
+        ({"ip": "", "last_ip": "", "fixed_ip": "192.168.1.10"}, ""),
+    ],
+    ids=["last_ip_only", "fixed_ip_only", "empty_ip_last_ip", "empty_ip_fixed_ip"],
+)
+def test_build_client_host_uses_last_ip_or_fixed_ip_when_ip_missing(
+    raw: dict[str, str],
+    client_ip: str | None,
+) -> None:
+    plugin = InventoryModule()
+    client = SimpleNamespace(
+        last_seen=1_700_000_000,
+        ip=client_ip,
+        raw=raw,
+        name="Study Proxmox",
+        is_wired=True,
+    )
+
+    with patch.object(plugin, "get_option", side_effect=lambda key: "name" if key == "hostname" else "default"):
+        host = plugin._build_client_host(
+            "aa:bb:cc:dd:ee:ff",
+            client,
+            vlan_names={},
+            current_time=1_700_000_100,
+            last_seen_threshold=3600,
+        )
+
+    assert host is not None
+    assert host["hostvars"]["ansible_host"] == "192.168.1.10"
+    assert host["hostvars"]["ip"] == "192.168.1.10"
+    assert host["hostvars"]["ipv4"] == "192.168.1.10"
+
+
+def test_build_client_host_prefers_ip_over_last_ip_and_fixed_ip() -> None:
+    plugin = InventoryModule()
+    client = SimpleNamespace(
+        last_seen=1_700_000_000,
+        ip="192.168.1.50",
+        raw={
+            "ip": "192.168.1.50",
+            "last_ip": "192.168.1.9",
+            "fixed_ip": "192.168.1.148",
+        },
+        name="server",
+        is_wired=True,
+    )
+
+    with patch.object(plugin, "get_option", side_effect=lambda key: "name" if key == "hostname" else "default"):
+        host = plugin._build_client_host(
+            "aa:bb:cc:dd:ee:ff",
+            client,
+            vlan_names={},
+            current_time=1_700_000_100,
+            last_seen_threshold=3600,
+        )
+
+    assert host is not None
+    assert host["hostvars"]["ansible_host"] == "192.168.1.50"
+
+
+def test_build_client_host_last_ip_beats_fixed_ip() -> None:
+    plugin = InventoryModule()
+    client = SimpleNamespace(
+        last_seen=1_700_000_000,
+        ip=None,
+        raw={"last_ip": "192.168.1.10", "fixed_ip": "192.168.1.99"},
+        name="server",
+        is_wired=True,
+    )
+
+    with patch.object(plugin, "get_option", side_effect=lambda key: "name" if key == "hostname" else "default"):
+        host = plugin._build_client_host(
+            "aa:bb:cc:dd:ee:ff",
+            client,
+            vlan_names={},
+            current_time=1_700_000_100,
+            last_seen_threshold=3600,
+        )
+
+    assert host is not None
+    assert host["hostvars"]["ansible_host"] == "192.168.1.10"
+
+
+def test_build_client_host_uses_fixed_ip_attribute_when_raw_missing() -> None:
+    plugin = InventoryModule()
+    client = SimpleNamespace(
+        last_seen=1_700_000_000,
+        ip=None,
+        fixed_ip="192.168.1.10",
+        raw={},
+        name="server",
+        is_wired=True,
+    )
+
+    with patch.object(plugin, "get_option", side_effect=lambda key: "name" if key == "hostname" else "default"):
+        host = plugin._build_client_host(
+            "aa:bb:cc:dd:ee:ff",
+            client,
+            vlan_names={},
+            current_time=1_700_000_100,
+            last_seen_threshold=3600,
+        )
+
+    assert host is not None
+    assert host["hostvars"]["ansible_host"] == "192.168.1.10"
+
+
+def test_build_client_host_ipv6_only_when_no_ipv4_fields() -> None:
+    plugin = InventoryModule()
+    client = SimpleNamespace(
+        last_seen=1_700_000_000,
+        ip=None,
+        raw={"ipv6_addresses": ["2001:db8::1"]},
+        name="ipv6-only",
+        is_wired=True,
+    )
+
+    with patch.object(plugin, "get_option", side_effect=lambda key: "name" if key == "hostname" else "default"):
+        host = plugin._build_client_host(
+            "aa:bb:cc:dd:ee:ff",
+            client,
+            vlan_names={},
+            current_time=1_700_000_100,
+            last_seen_threshold=3600,
+        )
+
+    assert host is not None
+    assert host["hostvars"]["ansible_host"] == "2001:db8::1"
+    assert "ip" not in host["hostvars"]
+
+
+def test_build_client_host_returns_none_without_any_address() -> None:
+    plugin = InventoryModule()
+    client = SimpleNamespace(
+        last_seen=1_700_000_000,
+        ip=None,
+        raw={},
+        name="offline",
+        is_wired=True,
+    )
+
+    with patch.object(plugin, "get_option", side_effect=lambda key: "name" if key == "hostname" else "default"):
+        host = plugin._build_client_host(
+            "aa:bb:cc:dd:ee:ff",
+            client,
+            vlan_names={},
+            current_time=1_700_000_100,
+            last_seen_threshold=3600,
+        )
+
+    assert host is None
+
+
+def test_build_client_host_stale_client_with_last_ip_only_returns_none() -> None:
+    plugin = InventoryModule()
+    client = SimpleNamespace(
+        last_seen=1_700_000_000,
+        ip=None,
+        raw={"last_ip": "192.168.1.10"},
+        name="stale",
+        is_wired=True,
+    )
+
+    with patch.object(plugin, "get_option", side_effect=lambda key: "name" if key == "hostname" else "default"):
+        host = plugin._build_client_host(
+            "aa:bb:cc:dd:ee:ff",
+            client,
+            vlan_names={},
+            current_time=1_700_500_000,
+            last_seen_threshold=3600,
+        )
+
+    assert host is None
+
+
 def test_build_client_host_wireless_includes_powersave_not_wired_fields() -> None:
     plugin = InventoryModule()
     client = SimpleNamespace(
