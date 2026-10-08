@@ -755,7 +755,8 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 hostvars["sw_mac"] = sw_mac
             sw_port = getattr(client, "switch_port", None) or getattr(client, "sw_port", None) or raw.get("sw_port")
             if sw_port:
-                hostvars["port"] = sw_port
+                # Ansible reserves "port"; this is a physical switch port, not a connection port.
+                hostvars["switch_port"] = sw_port
 
         vlan = getattr(client, "vlan", None) or raw.get("vlan")
         if vlan is not None:

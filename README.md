@@ -121,7 +121,7 @@ Typical client variables:
 }
 ```
 
-Clients can also expose IPv6 addresses, upstream AP/switch MACs, switch port, reservation address, guest/blocked status, lifecycle timestamps, and manufacturer information. Devices expose model, type, firmware, adoption/state, uptime, available firmware updates, uplink, PoE port, temperature, outlet, and system-stat information when reported. Optional variables are omitted when unavailable. Inspect a host with `ansible-inventory --host HOST` before using optional fields in expressions.
+Clients can also expose IPv6 addresses, upstream AP/switch MACs, `switch_port`, reservation address, guest/blocked status, lifecycle timestamps, and manufacturer information. Devices expose model, type, firmware, adoption/state, uptime, available firmware updates, uplink, PoE port, temperature, outlet, and system-stat information when reported. Optional variables are omitted when unavailable. Inspect a host with `ansible-inventory --host HOST` before using optional fields in expressions.
 
 ## Filtering and composed groups
 

@@ -27,6 +27,7 @@
 - `token` accepts an expiring UniFi OS login cookie, not a Network Integrations API key. Password login, with optional TOTP, remains the unattended authentication method.
 - Historical client addresses remain enabled by default. Set `allow_historical_addresses: false` to require a current address. The `address_source` host variable identifies `ip`, `last_ip`, `fixed_ip`, or `ipv6`.
 - Existing cache entries refresh once to adopt the new cache format.
+- The physical switch-port variable is now `switch_port`; the former `port` variable used an Ansible-reserved name. Update expressions referring to it.
 
 ## 1.2.2 (2026-08-25)
 

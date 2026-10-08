@@ -103,6 +103,8 @@ def controller(tmp_path):
                     "ip": "192.0.2.10",
                     "last_seen": int(time.time()),
                     "is_wired": True,
+                    "sw_mac": "00:11:22:33:44:88",
+                    "sw_port": 8,
                     "vlan": 10,
                 },
                 {
@@ -223,6 +225,10 @@ def test_password_inventory_collision_and_constructed_options(controller, invent
     assert set(hosts) == {"NAS__001122334455", "NAS__001122334466", "Office_AP"}
     assert hosts["NAS__001122334455"]["ansible_host"] == "192.0.2.10"
     assert hosts["NAS__001122334455"]["derived"] == "192.0.2.10"
+    assert hosts["NAS__001122334455"]["sw_mac"] == "00:11:22:33:44:88"
+    assert hosts["NAS__001122334455"]["switch_port"] == 8
+    assert "port" not in hosts["NAS__001122334455"]
+    assert "reserved name" not in result.stderr
     assert "UniFi hostname collision" in result.stderr
     groups = json.loads(result.stdout)
     assert set(groups["servers"]["hosts"]) == {"NAS__001122334455", "NAS__001122334466"}
