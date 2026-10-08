@@ -1,0 +1,5 @@
+-r requirements.txt
+-r tests/unit/requirements.txt
+ansible-core>=2.21.5
+ruff>=0.16.10
+cryptography>=50.0.1
