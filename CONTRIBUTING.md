@@ -1,53 +1,42 @@
 # Contributing
 
-Pull requests are welcome. If you are unsure about an approach, open an issue first.
+Pull requests are welcome. Keep changes focused and include a reproduction for bug fixes.
 
 ## Development setup
 
+Use Python 3.14 or newer:
+
 ```bash
-python3 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt -r tests/unit/requirements.txt
-pip install ansible-core pytest ruff pre-commit
-ansible-galaxy collection install community.library_inventory_filtering_v1 \
-  -p tests/_ansible_collections --force
-pre-commit install
+bash .github/scripts/install-ci-dependencies.sh latest
 ```
+
+The dependency installer uses `requirements-dev.txt` and installs the collection dependency for source tests. Use `minimum` instead of `latest` to test declared dependency floors. No live controller is needed for the automated suite.
 
 ## Checks
 
-Run these before opening a PR:
-
 ```bash
-pre-commit run --all-files   # ruff lint + format
-pytest tests/unit/ -q
-./.github/scripts/prepare-collection-tree.sh
-SANITY_ROOT="$(cat .sanity-tree-path)"
-cd "$SANITY_ROOT/ansible_collections/aioue/network"
-ANSIBLE_COLLECTIONS_PATH="$SANITY_ROOT" ansible-test sanity --local --color no
+ruff check .
+ruff format --check .
+pytest tests/unit tests/integration -q
+mkdir -p dist
+ansible-galaxy collection build --output-path dist/
+bash .github/scripts/test-artifact.sh dist/aioue-network-*.tar.gz
+bash .github/scripts/prepare-collection-tree.sh
+SANITY_TREE="$(cat .sanity-tree-path)"
+cd "$SANITY_TREE/ansible_collections/aioue/network"
+ANSIBLE_COLLECTIONS_PATH="$SANITY_TREE" ansible-test sanity --local --python 3.14 --color no
 ```
 
-CI runs the same checks on every push and pull request to `main`.
+Use a fresh output directory for each build. The artifact script checks package contents, installs the archive into a temporary collection path, and runs the suite against the installed plugin. Integration tests use a fake HTTP controller with real Ansible and aiounifi.
 
-## Code style
+The sanity helper creates a fresh temporary child directory. `SANITY_ROOT`, if supplied, selects its parent; it never deletes the supplied directory. Temporary test trees remain available for inspection.
 
-- [Ruff](https://docs.astral.sh/ruff/) for linting and formatting (`ruff.toml`).
-- GPL-3.0-or-later for collection content.
-- Inventory plugin docs use Ansible markup in the plugin `DOCUMENTATION` block.
+CI runs Ruff, source and installed-artifact tests, and Ansible sanity with minimum and latest dependency resolutions. Add tests for changed behaviour, update the plugin's `DOCUMENTATION` block for options, and record user-visible changes in `CHANGELOG.md`.
 
-## Pull requests
-
-- Keep changes focused; one logical change per PR when possible.
-- Add or update unit tests in `tests/unit/` (no live UniFi controller required).
-- Update `CHANGELOG.md` under an `[Unreleased]` or version heading for user-visible changes.
-- Do not commit secrets, live inventory files, or `.env` files.
+Do not commit secrets, live inventory files, or `.env` files. Collection content uses GPL-3.0-or-later.
 
 ## Reporting bugs
 
-Include:
-
-- Collection version (`ansible-galaxy collection list aioue.network`)
-- aiounifi and aiohttp versions (`pip show aiounifi aiohttp`)
-- UniFi OS / gateway model and firmware (approximate is fine)
-- Sanitized inventory snippet (redact tokens and passwords)
-- Full error output from `ansible-inventory -i your.unifi.yaml --graph -vvv`
+Include the collection version (`ansible-galaxy collection list aioue.network`), Python/Ansible versions, dependency versions (`python -m pip show aiounifi aiohttp`), controller model/firmware, a sanitised inventory snippet, and the error from `ansible-inventory -i your.unifi.yml --graph -vvv`. Redact credentials, controller identifiers, and private addresses. Follow [SECURITY.md](SECURITY.md) for vulnerabilities.

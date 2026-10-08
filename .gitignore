@@ -13,6 +13,10 @@ __pycache__/
 # Sensitive configuration files
 inventory.yaml
 .env
+.env.*
+!.env.example
+inventory/*.local.unifi.yml
+inventory/*.local.unifi.yaml
 
 # Virtual environments
 venv/
@@ -33,7 +37,6 @@ ENV/
 .coverage
 htmlcov/
 tests/_ansible_collections/
-.venv/
 
 # Distribution / packaging
 dist/
@@ -42,4 +45,6 @@ build/
 *.tar.gz
 ansible_collections/
 .sanity-tree-path
+.sanity-tree/
+.sanity-collections/
 

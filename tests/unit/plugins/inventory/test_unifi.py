@@ -112,7 +112,10 @@ def test_fetch_passes_ssl_false_to_tcp_connector_with_ca_bundle_env(
     plugin.token = "test-token"
     plugin.totp_secret = ""
 
+    plugin._fetch_handler_records = AsyncMock()
     controller = mock_controller_cls.return_value
+    controller.connectivity.check_unifi_os = AsyncMock()
+    controller.connectivity.is_unifi_os = True
     controller.clients = SimpleNamespace(items=lambda: [])
     controller.devices = SimpleNamespace(items=lambda: [])
     controller.clients.update = AsyncMock()
@@ -139,7 +142,7 @@ def test_fetch_passes_ssl_false_to_tcp_connector_with_ca_bundle_env(
         plugin._run_async(plugin._fetch_from_controller())
 
     assert connector_kwargs.get("ssl") is False
-    controller.clients.update.assert_not_called()
+    plugin._fetch_handler_records.assert_awaited_once_with(controller, controller.devices)
 
 
 def test_inventory_value_serializes_enum() -> None:
@@ -608,6 +611,12 @@ def test_parse_with_mocked_controller(tmp_path: Path) -> None:
         "username": "",
         "password": "",
         "cache": False,
+        "api_timeout": 30,
+        "last_seen_minutes": 30,
+        "site": "default",
+        "exclude_clients": False,
+        "include_devices": False,
+        "exclude_devices": False,
         "strict": False,
         "filters": None,
         "compose": {},
@@ -1006,7 +1015,10 @@ def test_fetch_from_controller_respects_exclude_clients(
         port_table=[],
     )
 
+    plugin._fetch_handler_records = AsyncMock()
     controller = mock_controller_cls.return_value
+    controller.connectivity.check_unifi_os = AsyncMock()
+    controller.connectivity.is_unifi_os = True
     controller.clients = SimpleNamespace(items=lambda: [("aa:bb:cc:dd:ee:01", client)])
     controller.devices = SimpleNamespace(items=lambda: [("aa:bb:cc:dd:ee:02", device)])
     controller.clients.update = AsyncMock()
@@ -1035,8 +1047,7 @@ def test_fetch_from_controller_respects_exclude_clients(
     hostnames = [host["hostname"] for host in hosts]
     assert "laptop" not in hostnames
     assert "Office_AP" in hostnames
-    controller.clients.update.assert_not_called()
-    controller.devices.update.assert_called_once()
+    plugin._fetch_handler_records.assert_awaited_once_with(controller, controller.devices)
     controller.request.assert_not_called()
 
 
@@ -1072,7 +1083,10 @@ def test_fetch_from_controller_respects_exclude_devices(
         port_table=[],
     )
 
+    plugin._fetch_handler_records = AsyncMock()
     controller = mock_controller_cls.return_value
+    controller.connectivity.check_unifi_os = AsyncMock()
+    controller.connectivity.is_unifi_os = True
     controller.clients = SimpleNamespace(items=lambda: [("aa:bb:cc:dd:ee:01", client)])
     controller.devices = SimpleNamespace(items=lambda: [("aa:bb:cc:dd:ee:02", device)])
     controller.clients.update = AsyncMock()
@@ -1101,8 +1115,7 @@ def test_fetch_from_controller_respects_exclude_devices(
     hostnames = [host["hostname"] for host in hosts]
     assert "laptop" in hostnames
     assert "Office_AP" not in hostnames
-    controller.clients.update.assert_called_once()
-    controller.devices.update.assert_not_called()
+    plugin._fetch_handler_records.assert_awaited_once_with(controller, controller.clients)
     controller.request.assert_called_once()
 
 

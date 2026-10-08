@@ -1,0 +1,3 @@
+name: Inventory security checks
+queries:
+  - uses: security-extended

@@ -22,12 +22,13 @@ DOCUMENTATION = r"""
         - Tom Paine (@aioue)
         - Lenny Shirley (@lennysh)
     requirements:
-        - aiounifi >= 91.0.0 (Python library)
-        - aiohttp >= 3.14.2 (Python library)
-        - pyotp >= 2.9.0 (Python library; required for O(totp_secret))
+        - Python >= 3.14
+        - aiounifi >= 97 (Python library)
+        - aiohttp >= 3.14.4 (Python library)
+        - pyotp >= 2.10.0 (Python library; required for O(totp_secret))
     description:
         - Discovers UniFi clients and optionally devices from a UniFi OS controller
-        - Supports API token, username/password, and password with totp_secret (2FA / SSO)
+        - Supports session token, username/password, and password with totp_secret (2FA / SSO)
         - Groups hosts by connection type (wired/wireless), SSID, VLAN, and device type
     extends_documentation_fragment:
         - ansible.builtin.constructed
@@ -54,14 +55,16 @@ DOCUMENTATION = r"""
             env:
                 - name: UNIFI_PASSWORD
         token:
-            description: UniFi API token (preferred over username/password)
+            description:
+                - UniFi OS session cookie value (C(TOKEN)); takes precedence over username/password.
+                - This is an expiring login session, not a Network Integrations API key.
             type: str
             env:
                 - name: UNIFI_TOKEN
         totp_secret:
             description:
                 - TOTP shared secret for automated 2FA login (local or SSO accounts).
-                - Requires aiounifi v91+ (C(totp_secret) on C(Configuration)); adds C(pyotp) dependency
+                - Requires the C(pyotp) dependency.
             type: str
             env:
                 - name: UNIFI_TOTP_SECRET
@@ -85,6 +88,20 @@ DOCUMENTATION = r"""
             type: int
             default: 30
             version_added: 1.2.0
+        allow_historical_addresses:
+            description:
+                - Use C(last_ip) and C(fixed_ip) when UniFi omits a client's current IP.
+                - Disable when only currently reported addresses should become C(ansible_host).
+            type: bool
+            default: true
+            version_added: 1.3.0
+        strict_records:
+            description:
+                - Fail discovery when a client or device record is malformed.
+                - When V(false), skip malformed records with a warning.
+            type: bool
+            default: true
+            version_added: 1.3.0
         include_devices:
             description: Include UniFi devices (APs, switches, gateways) in inventory
             type: bool
@@ -125,6 +142,16 @@ DOCUMENTATION = r"""
             choices: [mac, name]
             env:
                 - name: UNIFI_HOSTNAME
+        hostname_collision:
+            description:
+                - How to handle inventory names shared by different UniFi hosts or existing inventory entries.
+                - V(disambiguate) adds a stable MAC suffix to colliding names and emits a warning.
+                - V(fail) stops inventory parsing before adding any hosts.
+            type: str
+            default: disambiguate
+            choices: [disambiguate, fail]
+            env:
+                - name: UNIFI_HOSTNAME_COLLISION
         filters:
             description:
                 - A list of include/exclude filters that allows to select/deselect hosts for this inventory.
@@ -160,15 +187,15 @@ last_seen_minutes: 30
 cache: true
 cache_timeout: 30
 
-# Method A: API token (preferred; token takes precedence if both are set)
+# Method A: UniFi OS session cookie (token takes precedence if both are set)
 plugin: aioue.network.unifi
 url: https://192.168.1.1
-token: your-api-token-here
+token: your-TOKEN-cookie-value
 validate_certs: false
 cache: true
 cache_timeout: 30
 
-# Method C: password + TOTP (2FA or ui.com SSO; aiounifi v91+, pyotp)
+# Method C: password + TOTP (2FA or ui.com SSO)
 plugin: aioue.network.unifi
 url: https://192.168.1.1
 username: your-account
@@ -191,12 +218,16 @@ keyed_groups:
 import asyncio
 import concurrent.futures
 import enum
-import inspect
+import hashlib
+import ipaddress
+import json
 import logging
+import math
 import re
 import ssl
 import time
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 from ansible.errors import AnsibleError
 from ansible.plugins.inventory import BaseInventoryPlugin, Cacheable, Constructable
@@ -212,8 +243,11 @@ try:
     from aiounifi.controller import Controller
     from aiounifi.errors import (
         AiounifiException,
+        BadGateway,
+        Forbidden,
         LoginRequired,
-        ResponseError,
+        RequestError,
+        ServiceUnavailable,
         TwoFaTokenRequired,
     )
 
@@ -240,12 +274,31 @@ def sanitize_group_name(name: str) -> str:
 
 def sanitize_hostname(name: str) -> str:
     """Sanitize a friendly name for use as an Ansible inventory hostname."""
-    return name.replace(" ", "_")
+    if not isinstance(name, str):
+        raise ValueError("hostname must be a string")
+    name = re.sub(r"[^\w.-]", "_", name.strip(), flags=re.UNICODE)
+    if not name or not name.strip("_.-"):
+        raise ValueError("hostname is empty after sanitization")
+    return name
 
 
 def mac_to_hostname(mac: str) -> str:
     """Convert a MAC address to a stable inventory hostname."""
     return mac.replace(":", "-").lower()
+
+
+def _usable_address(value: Any, version: int) -> str | None:
+    """Only advertise addresses usable without a controller-local interface scope."""
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise ValueError("IP address must be a string")
+    address = ipaddress.ip_address(value)
+    if address.version != version:
+        raise ValueError(f"expected IPv{version} address")
+    if address.is_unspecified or address.is_multicast or address.is_loopback or address.is_link_local:
+        return None
+    return str(address)
 
 
 def aiohttp_connector_ssl(validate_certs: bool):
@@ -287,20 +340,14 @@ def _inventory_value(value: Any) -> Any:
     return str(value)
 
 
-def _login_rate_limit_message(error: Exception) -> Optional[str]:
+def _login_rate_limit_message(error: Exception) -> str | None:
     """Return a user-facing message when UniFi throttles authentication."""
     if AuthenticationRateLimitError is not None and isinstance(error, AuthenticationRateLimitError):
-        return (
-            "UniFi login rate limit reached. Wait before retrying, use token "
-            "authentication, or increase inventory cache_timeout."
-        )
+        return "UniFi login rate limit reached. Wait before retrying or increase inventory cache_timeout."
 
     err = str(error)
     if "429" in err or "AUTHENTICATION_FAILED_LIMIT_REACHED" in err:
-        return (
-            "UniFi login rate limit reached. Wait before retrying, use token "
-            "authentication, or increase inventory cache_timeout."
-        )
+        return "UniFi login rate limit reached. Wait before retrying or increase inventory cache_timeout."
     return None
 
 
@@ -387,6 +434,20 @@ def _set_optional_hostvar(hostvars: Dict[str, Any], key: str, value: Any) -> Non
     hostvars[key] = _inventory_value(value)
 
 
+def _optional_attribute(item: Any, name: str) -> Any:
+    """Some aiounifi properties index optional raw fields instead of using get()."""
+    try:
+        return getattr(item, name, None)
+    except KeyError:
+        return None
+    except AssertionError as error:
+        # aiounifi also asserts types for optional fields absent from some models.
+        raw = getattr(item, "raw", {})
+        if raw.get(name) is None:
+            return None
+        raise ValueError(f"invalid {name}") from error
+
+
 def _iter_handler_items(handler: Any) -> Iterable[Tuple[str, Any]]:
     """Iterate (id, item) pairs from an aiounifi handler without private API access."""
     items_fn = getattr(handler, "items", None)
@@ -419,7 +480,7 @@ def _iter_handler_items(handler: Any) -> Iterable[Tuple[str, Any]]:
     if isinstance(private_items, dict):
         return private_items.items()
 
-    return []
+    raise AnsibleError("Installed aiounifi handler has no supported item iterator")
 
 
 class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
@@ -459,10 +520,11 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         # Apply Jinja2 templating to connection options so vault lookups in
         # inventory files (e.g. secrets.yml) resolve before authentication.
         self.url = self._template_option("url")
-        self.username = self._template_option("username") or ""
-        self.password = self._template_option("password") or ""
         self.token = self._template_option("token") or ""
-        self.totp_secret = self._template_option("totp_secret") or ""
+        # Unused password/vault lookups must not break session-token authentication.
+        self.username = "" if self.token else self._template_option("username") or ""
+        self.password = "" if self.token else self._template_option("password") or ""
+        self.totp_secret = "" if self.token else self._template_option("totp_secret") or ""
 
         if not self.url:
             raise AnsibleError("UniFi controller URL is required")
@@ -470,12 +532,23 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         if not self.token and not (self.username and self.password):
             raise AnsibleError("Authentication required: provide token or username+password")
 
+        self._validate_options()
+
         cache_key = self.get_cache_key(path)
+        fingerprint = self._cache_fingerprint()
         user_cache_setting = self.get_option("cache")
         attempt_to_read_cache = user_cache_setting and cache
         if attempt_to_read_cache:
             try:
-                results = self._cache[cache_key]
+                entry = self._cache[cache_key]
+                results = (
+                    entry["hosts"]
+                    if isinstance(entry, dict)
+                    and entry.get("version") == 1
+                    and entry.get("fingerprint") == fingerprint
+                    and isinstance(entry.get("hosts"), list)
+                    else None
+                )
             except KeyError:
                 results = None
         else:
@@ -484,11 +557,30 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         if results is None:
             results = self._run_async(self._fetch_from_controller())
             if user_cache_setting:
-                self._cache[cache_key] = results
+                self._cache[cache_key] = {"version": 1, "fingerprint": fingerprint, "hosts": results}
 
         self._populate_inventory(results)
 
-    def _template_option(self, option_name: str) -> Optional[str]:
+    def _cache_fingerprint(self) -> str:
+        """Invalidate fetched data when its effective source or selection changes."""
+        options = {
+            key: self.get_option(key)
+            for key in (
+                "site",
+                "hostname",
+                "include_devices",
+                "exclude_clients",
+                "exclude_devices",
+                "last_seen_minutes",
+                "allow_historical_addresses",
+                "strict_records",
+            )
+        }
+        # Authentication material must never be copied into persistent cache data.
+        options["url"] = self.url
+        return hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest()
+
+    def _template_option(self, option_name: str) -> str | None:
         """Return an inventory option value, resolving Jinja2 templates if present."""
         value = self.get_option(option_name)
         if value is None:
@@ -497,22 +589,49 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             return self.templar.template(value)
         return value
 
+    def _validate_options(self) -> None:
+        """Reject settings that would silently change endpoints or remove time limits."""
+        try:
+            parsed = urlsplit(self.url)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.path not in ("", "/")
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError
+            port = parsed.port
+            if port == 0:
+                raise ValueError
+            self.url = urlunsplit(("https", parsed.netloc.lower(), "", "", ""))
+        except ValueError, TypeError:
+            raise AnsibleError(
+                "url must be an HTTPS controller origin, with optional port and no credentials or path"
+            ) from None
+        if self.get_option("api_timeout") <= 0:
+            raise AnsibleError("api_timeout must be greater than zero")
+        if self.get_option("last_seen_minutes") < 0:
+            raise AnsibleError("last_seen_minutes must be zero or greater")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", self.get_option("site")):
+            raise AnsibleError("site must contain only letters, numbers, underscores, or hyphens")
+        if self.get_option("exclude_clients") and not (
+            self.get_option("include_devices") and not self.get_option("exclude_devices")
+        ):
+            raise AnsibleError("Nothing to fetch from UniFi: enable clients or devices")
+
     def _run_async(self, coro):
         """Run a coroutine in a dedicated thread with its own event loop."""
 
         def _target():
-            loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(loop)
-                return loop.run_until_complete(coro)
-            finally:
-                loop.close()
-                asyncio.set_event_loop(None)
+            return asyncio.run(coro)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             return executor.submit(_target).result()
 
-    def _resolve_client_hostname(self, mac: str, client: Any, mode: str) -> Tuple[str, Optional[str]]:
+    def _resolve_client_hostname(self, mac: str, client: Any, mode: str) -> Tuple[str, str | None]:
         """Return inventory hostname and optional original UniFi name."""
         friendly = (
             getattr(client, "name", None)
@@ -534,7 +653,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
         return sanitize_hostname(friendly), friendly
 
-    def _resolve_device_hostname(self, mac: str, device: Any, mode: str) -> Tuple[str, Optional[str]]:
+    def _resolve_device_hostname(self, mac: str, device: Any, mode: str) -> Tuple[str, str | None]:
         """Return inventory hostname and optional original UniFi name."""
         name = getattr(device, "name", None)
 
@@ -554,9 +673,14 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         vlan_names: Dict[int, str],
         current_time: float,
         last_seen_threshold: float,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Dict[str, Any] | None:
         """Build a host dict for a UniFi client, or None if it should be skipped."""
-        last_seen = getattr(client, "last_seen", 0)
+        raw = getattr(client, "raw", None) or {}
+        if not isinstance(raw, dict):
+            raise ValueError("client raw data must be a dictionary")
+        last_seen = float(getattr(client, "last_seen", 0))
+        if not math.isfinite(last_seen) or last_seen < 0:
+            raise ValueError("last_seen must be a finite, non-negative Unix timestamp")
         if (current_time - last_seen) > last_seen_threshold:
             return None
 
@@ -564,36 +688,39 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         hostname, unifi_name = self._resolve_client_hostname(mac, client, hostname_mode)
 
         # UniFi omits plain ip for some DHCP-reserved wired clients; last_ip/fixed_ip remain.
-        raw = getattr(client, "raw", None) or {}
-        ipv4 = (
-            getattr(client, "ip", None)
-            or raw.get("ip")
-            or raw.get("last_ip")
-            or getattr(client, "fixed_ip", None)
-            or raw.get("fixed_ip")
-        )
-
-        ipv6_addresses = client.raw.get("ipv6_addresses", [])
-        ipv6 = None
-        ipv6_link_local = None
-
-        if ipv6_addresses:
-            for addr in ipv6_addresses:
-                if addr.startswith("fe80:"):
-                    if not ipv6_link_local:
-                        ipv6_link_local = addr
-                else:
-                    ipv6 = addr
+        ipv4 = _usable_address(getattr(client, "ip", None) or raw.get("ip"), 4)
+        address_source = "ip"
+        if not ipv4 and self.get_option("allow_historical_addresses") is not False:
+            for source, value in (
+                ("last_ip", raw.get("last_ip")),
+                ("fixed_ip", getattr(client, "fixed_ip", None) or raw.get("fixed_ip")),
+            ):
+                ipv4 = _usable_address(value, 4)
+                if ipv4:
+                    address_source = source
                     break
 
-            if not ipv6 and ipv6_link_local:
-                ipv6 = ipv6_link_local
+        ipv6_addresses = raw.get("ipv6_addresses") or []
+        if not isinstance(ipv6_addresses, list):
+            raise ValueError("ipv6_addresses must be a list")
+        ipv6 = None
+        usable_ipv6 = []
+        for addr in ipv6_addresses:
+            if not isinstance(addr, str):
+                raise ValueError("ipv6_addresses entries must be strings")
+            address = _usable_address(addr, 6)
+            if address:
+                usable_ipv6.append(address)
+        if usable_ipv6:
+            ipv6 = usable_ipv6[0]
 
         ansible_host = ipv4 or ipv6
         if not ansible_host:
             return None
 
         is_wired = getattr(client, "is_wired", False)
+        if not isinstance(is_wired, bool):
+            raise ValueError("is_wired must be a boolean")
         hostvars = {
             "ansible_host": ansible_host,
             "mac": mac,
@@ -601,6 +728,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             "site": self.get_option("site"),
             "last_seen_unix": int(last_seen),
             "last_seen_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(last_seen)),
+            "address_source": address_source if ipv4 else "ipv6",
         }
 
         if unifi_name is not None:
@@ -618,20 +746,25 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             ssid = getattr(client, "essid", None)
             if ssid:
                 hostvars["ssid"] = ssid
-            ap_mac = getattr(client, "ap_mac", None)
+            ap_mac = getattr(client, "access_point_mac", None) or getattr(client, "ap_mac", None) or raw.get("ap_mac")
             if ap_mac:
                 hostvars["ap_mac"] = ap_mac
         else:
-            sw_mac = getattr(client, "sw_mac", None)
+            sw_mac = getattr(client, "switch_mac", None) or getattr(client, "sw_mac", None) or raw.get("sw_mac")
             if sw_mac:
                 hostvars["sw_mac"] = sw_mac
-            sw_port = getattr(client, "sw_port", None)
+            sw_port = getattr(client, "switch_port", None) or getattr(client, "sw_port", None) or raw.get("sw_port")
             if sw_port:
-                hostvars["port"] = sw_port
+                # Ansible reserves "port"; this is a physical switch port, not a connection port.
+                hostvars["switch_port"] = sw_port
 
-        vlan = getattr(client, "vlan", None) or client.raw.get("vlan")
-        network = getattr(client, "network", None) or client.raw.get("network")
-        network_id = getattr(client, "network_id", None) or client.raw.get("network_id")
+        vlan = getattr(client, "vlan", None) or raw.get("vlan")
+        if vlan is not None:
+            vlan = int(vlan)
+            if not 0 <= vlan <= 4094:
+                raise ValueError("vlan must be between zero and 4094")
+        network = getattr(client, "network", None) or raw.get("network")
+        network_id = getattr(client, "network_id", None) or raw.get("network_id")
 
         if network:
             hostvars["network"] = network
@@ -692,9 +825,10 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
         return {"hostname": hostname, "hostvars": hostvars, "groups": groups}
 
-    def _build_device_host(self, mac: str, device: Any) -> Optional[Dict[str, Any]]:
+    def _build_device_host(self, mac: str, device: Any) -> Dict[str, Any] | None:
         """Build a host dict for a UniFi device, or None if it should be skipped."""
-        ip = getattr(device, "ip", None)
+        value = getattr(device, "ip", None)
+        ip = _usable_address(value, ipaddress.ip_address(value).version) if value else None
         if not ip:
             return None
 
@@ -715,31 +849,31 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             "site": self.get_option("site"),
         }
 
-        _set_optional_hostvar(hostvars, "device_id", getattr(device, "id", None))
-        _set_optional_hostvar(hostvars, "state", getattr(device, "state", None))
-        _set_optional_hostvar(hostvars, "adopted", getattr(device, "adopted", None))
-        _set_optional_hostvar(hostvars, "upgradable", getattr(device, "upgradable", None))
-        _set_optional_hostvar(hostvars, "upgrade_to_firmware", getattr(device, "upgrade_to_firmware", None))
-        _set_optional_hostvar(hostvars, "overheating", getattr(device, "overheating", None))
-        _set_optional_hostvar(hostvars, "disabled", getattr(device, "disabled", None))
-        _set_optional_hostvar(hostvars, "uptime", getattr(device, "uptime", None))
-        _set_optional_hostvar(hostvars, "uplink_depth", getattr(device, "uplink_depth", None))
-        _set_optional_hostvar(hostvars, "client_count", getattr(device, "user_num_sta", None))
-        uplink = getattr(device, "uplink", None)
+        _set_optional_hostvar(hostvars, "device_id", _optional_attribute(device, "id"))
+        _set_optional_hostvar(hostvars, "state", _optional_attribute(device, "state"))
+        _set_optional_hostvar(hostvars, "adopted", _optional_attribute(device, "adopted"))
+        _set_optional_hostvar(hostvars, "upgradable", _optional_attribute(device, "upgradable"))
+        _set_optional_hostvar(hostvars, "upgrade_to_firmware", _optional_attribute(device, "upgrade_to_firmware"))
+        _set_optional_hostvar(hostvars, "overheating", _optional_attribute(device, "overheating"))
+        _set_optional_hostvar(hostvars, "disabled", _optional_attribute(device, "disabled"))
+        _set_optional_hostvar(hostvars, "uptime", _optional_attribute(device, "uptime"))
+        _set_optional_hostvar(hostvars, "uplink_depth", _optional_attribute(device, "uplink_depth"))
+        _set_optional_hostvar(hostvars, "client_count", _optional_attribute(device, "user_num_sta"))
+        uplink = _optional_attribute(device, "uplink")
         if uplink:
             hostvars["uplink"] = _summarize_uplink(uplink)
 
-        _set_optional_hostvar(hostvars, "general_temperature", getattr(device, "general_temperature", None))
-        _set_optional_hostvar(hostvars, "fan_level", getattr(device, "fan_level", None))
-        _set_optional_hostvar(hostvars, "has_fan", getattr(device, "has_fan", None))
-        _set_optional_hostvar(hostvars, "has_temperature", getattr(device, "has_temperature", None))
-        _set_optional_hostvar(hostvars, "last_seen", getattr(device, "last_seen", None))
-        _set_optional_hostvar(hostvars, "supports_led_ring", getattr(device, "supports_led_ring", None))
-        _set_optional_hostvar(hostvars, "led_override", getattr(device, "led_override", None))
+        _set_optional_hostvar(hostvars, "general_temperature", _optional_attribute(device, "general_temperature"))
+        _set_optional_hostvar(hostvars, "fan_level", _optional_attribute(device, "fan_level"))
+        _set_optional_hostvar(hostvars, "has_fan", _optional_attribute(device, "has_fan"))
+        _set_optional_hostvar(hostvars, "has_temperature", _optional_attribute(device, "has_temperature"))
+        _set_optional_hostvar(hostvars, "last_seen", _optional_attribute(device, "last_seen"))
+        _set_optional_hostvar(hostvars, "supports_led_ring", _optional_attribute(device, "supports_led_ring"))
+        _set_optional_hostvar(hostvars, "led_override", _optional_attribute(device, "led_override"))
         _set_optional_hostvar(
             hostvars,
             "led_override_color",
-            getattr(device, "led_override_color", None),
+            _optional_attribute(device, "led_override_color"),
         )
 
         try:
@@ -747,7 +881,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             _set_optional_hostvar(hostvars, "cpu_percent", cpu)
             _set_optional_hostvar(hostvars, "mem_percent", mem)
             _set_optional_hostvar(hostvars, "system_uptime", uptime)
-        except (AttributeError, KeyError, TypeError, ValueError):
+        except AttributeError, KeyError, TypeError, ValueError:
             pass
 
         poe_ports = _build_poe_ports(device)
@@ -778,19 +912,101 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
         return {"hostname": hostname, "hostvars": hostvars, "groups": groups}
 
+    def _host_identity(self, hostvars: Dict[str, Any]) -> Tuple[str, str, str]:
+        """MAC identity is local to a controller and site, not a friendly name."""
+        return (
+            hostvars.get("unifi_controller", getattr(self, "url", "")),
+            str(hostvars.get("site", self.get_option("site") or "default")),
+            re.sub(r"[^a-z0-9]", "", str(hostvars.get("mac", "")).lower()),
+        )
+
+    def _existing_host_matches(self, hostname: str, hostvars: Dict[str, Any]) -> bool:
+        """Allow static host variables to enrich the same discovered machine."""
+        existing = self.inventory.get_host(hostname)
+        if existing is None:
+            return True
+        previous = existing.get_vars()
+        if previous.get("unifi_controller"):
+            return self._host_identity(previous) == self._host_identity(hostvars)
+        if previous.get("mac"):
+            return self._host_identity(previous)[1:] == self._host_identity(hostvars)[1:]
+        return not previous.get("ansible_host") or previous["ansible_host"] == hostvars.get("ansible_host")
+
+    def _assign_hostnames(self, hosts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Resolve every collision before mutating inventory to avoid partial merges."""
+        identities: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+        unique_hosts = []
+        for host in hosts:
+            identity = self._host_identity(host["hostvars"])
+            if identity[2]:
+                if identity in identities:
+                    if host != identities[identity]:
+                        raise AnsibleError(f"Conflicting UniFi records for MAC {host['hostvars']['mac']}")
+                    continue
+                identities[identity] = host
+            unique_hosts.append(host)
+
+        counts: Dict[str, int] = {}
+        for host in unique_hosts:
+            counts[host["hostname"]] = counts.get(host["hostname"], 0) + 1
+        groups = set(self.inventory.groups)
+        groups.update(group for host in unique_hosts for group in host.get("groups", []))
+        reserved = set(counts) | set(self.inventory.hosts) | groups
+
+        def available(name: str, hostvars: Dict[str, Any]) -> bool:
+            return name not in reserved or (
+                name not in counts
+                and name not in groups
+                and name in self.inventory.hosts
+                and self._existing_host_matches(name, hostvars)
+            )
+
+        assigned = []
+        for host in sorted(unique_hosts, key=lambda item: (item["hostname"], self._host_identity(item["hostvars"]))):
+            hostname = host["hostname"]
+            collision = (
+                counts[hostname] > 1
+                or hostname in groups
+                or not self._existing_host_matches(hostname, host["hostvars"])
+            )
+            if collision:
+                if self.get_option("hostname_collision") == "fail":
+                    raise AnsibleError(
+                        f"UniFi hostname collision for {hostname!r}; rename the hosts or use hostname_collision: disambiguate"
+                    )
+                identity = self._host_identity(host["hostvars"])
+                if not identity[2]:
+                    raise AnsibleError(f"Cannot disambiguate UniFi hostname {hostname!r} without a MAC address")
+                resolved = f"{hostname}__{identity[2]}"
+                if not available(resolved, host["hostvars"]):
+                    digest = hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:12]
+                    resolved = f"{resolved}__{digest}"
+                    index = 2
+                    while not available(resolved, host["hostvars"]):
+                        resolved = f"{hostname}__{identity[2]}__{digest}_{index}"
+                        index += 1
+                reserved.add(resolved)
+                self.display.warning(f"UniFi hostname collision for {hostname!r}; using {resolved!r}")
+                host = {**host, "hostname": resolved}
+            assigned.append(host)
+        return assigned
+
     def _populate_inventory(self, hosts: List[Dict[str, Any]]) -> None:
         """Populate Ansible inventory from fetched host dicts."""
         strict = self.get_option("strict")
         filters = parse_filters(self.get_option("filters"))
 
-        for host_data in hosts:
+        selected = []
+        for host in hosts:
+            hostvars = {key: _inventory_value(value) for key, value in host["hostvars"].items()}
+            hostvars["unifi_controller"] = getattr(self, "url", "")
+            if filter_host(self, host["hostname"], hostvars, filters):
+                selected.append({**host, "hostvars": hostvars})
+
+        for host_data in self._assign_hostnames(selected):
             hostname = host_data["hostname"]
-            hostvars = {key: _inventory_value(value) for key, value in host_data["hostvars"].items()}
+            hostvars = host_data["hostvars"]
             groups = host_data.get("groups", [])
-
-            if not filter_host(self, hostname, hostvars, filters):
-                continue
-
             self.inventory.add_host(hostname)
             for key, value in hostvars.items():
                 self.inventory.set_variable(hostname, key, value)
@@ -803,133 +1019,154 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 self.inventory.add_group(group_name)
                 self.inventory.add_child(group_name, hostname)
 
-    async def _fetch_from_controller(self) -> List[Dict[str, Any]]:
-        """Fetch inventory from UniFi controller."""
-        hosts: List[Dict[str, Any]] = []
-
-        url = self.url
-        validate_certs = self.get_option("validate_certs")
-        exclude_clients = self.get_option("exclude_clients")
-        include_devices = self.get_option("include_devices")
-        exclude_devices = self.get_option("exclude_devices")
-        fetch_clients = not exclude_clients
-        fetch_devices = include_devices and not exclude_devices
-        if not fetch_clients and not fetch_devices:
-            raise AnsibleError(
-                "Nothing to fetch from UniFi: enable clients or devices "
-                "(check exclude_clients, exclude_devices, and include_devices)."
-            )
-
-        aiohttp_ssl = aiohttp_connector_ssl(validate_certs)
-        aiounifi_ssl_context = aiounifi_configuration_ssl_context(validate_certs)
-        api_timeout = self.get_option("api_timeout")
-        timeout = aiohttp.ClientTimeout(total=api_timeout)
-
-        connector = aiohttp.TCPConnector(ssl=aiohttp_ssl)
-        session = aiohttp.ClientSession(connector=connector, timeout=timeout)
-
-        try:
-            token = self.token
-            if token:
-                from http.cookies import SimpleCookie
-
-                from yarl import URL
-
-                cookies = SimpleCookie()
-                cookies["unifises"] = token
-                session.cookie_jar.update_cookies(cookies, URL(url))
-
-            from urllib.parse import urlparse
-
-            parsed = urlparse(url)
-            host = parsed.hostname or parsed.path
-            port = parsed.port or 443
-
-            config_kwargs = {
-                "session": session,
-                "host": host,
-                "username": self.username,
-                "password": self.password,
-                "port": port,
-                "site": self.get_option("site"),
-                "ssl_context": aiounifi_ssl_context,
-            }
-            if self.totp_secret and "totp_secret" in inspect.signature(Configuration).parameters:
-                config_kwargs["totp_secret"] = self.totp_secret
-
-            config = Configuration(**config_kwargs)
-
-            controller = Controller(config)
-
-            if not token:
-                try:
-                    await controller.login()
-                except LoginRequired:
-                    raise AnsibleError("Authentication failed: check credentials")
-                except TwoFaTokenRequired:
-                    if self.totp_secret and "totp_secret" not in inspect.signature(Configuration).parameters:
-                        raise AnsibleError(
-                            "2FA is required but installed aiounifi does not support "
-                            "totp_secret yet. Upgrade aiounifi, use token authentication, "
-                            "or use a local admin without 2FA."
-                        )
-                    raise AnsibleError(
-                        "2FA is required. Set totp_secret (vault-friendly TOTP seed), use "
-                        "token authentication, or create a local admin without 2FA."
-                    )
-                except (ResponseError, AiounifiException) as e:
-                    rate_limit_message = _login_rate_limit_message(e)
-                    if rate_limit_message:
-                        raise AnsibleError(rate_limit_message)
-                    raise AnsibleError(f"Controller error during login: {e}")
-
+    async def _read_with_retry(self, operation):
+        """Retry transient reads, never bad credentials or authentication throttling."""
+        for attempt in range(3):
             try:
-                if fetch_clients:
-                    await controller.clients.update()
-                if fetch_devices:
-                    await controller.devices.update()
-            except (AiounifiException, ResponseError) as e:
-                if "403" in str(e) or "401" in str(e):
-                    raise AnsibleError(
-                        "Authorization failed. If using 2FA, create a local admin account "
-                        "without 2FA for automation, or use token authentication."
-                    )
-                raise AnsibleError(f"Failed to fetch data from controller: {e}")
+                return await operation()
+            except (TimeoutError, BadGateway, ServiceUnavailable, RequestError) as error:
+                cause = error
+                if isinstance(error, RequestError) and not isinstance(error, (BadGateway, ServiceUnavailable)):
+                    cause = error.__context__
+                transient = isinstance(
+                    cause, (BadGateway, ServiceUnavailable, asyncio.TimeoutError, aiohttp.ClientConnectionError)
+                )
+                if isinstance(cause, aiohttp.ClientSSLError) or not transient or attempt == 2:
+                    raise
+                await asyncio.sleep(attempt + 1)
+
+    async def _fetch_handler_records(self, controller, handler):
+        """Validate raw records before aiounifi can skip missing IDs or overwrite duplicates."""
+        response = await self._read_with_retry(lambda: controller.request(handler.api_request))
+        if not isinstance(response, dict) or not isinstance(response.get("data"), list):
+            raise AnsibleError("Invalid UniFi inventory response: expected a data list")
+        records = {}
+        for record in response["data"]:
+            mac = record.get("mac") if isinstance(record, dict) else None
+            if not isinstance(mac, str) or not re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", mac):
+                if self.get_option("strict_records") is not False:
+                    raise AnsibleError("Malformed UniFi record: missing or invalid MAC address")
+                self.display.warning("Malformed UniFi record: missing or invalid MAC address; skipping")
+                continue
+            identity = mac.lower()
+            if identity in records and record != records[identity]:
+                # Conflicting identities cannot be safely selected even in permissive mode.
+                raise AnsibleError(f"Conflicting UniFi records for MAC {mac}")
+            records[identity] = record
+        handler.process_raw(list(records.values()))
+
+    def _append_record(self, hosts, mac, item, builder, *args):
+        """Keep malformed records visible and apply the explicit failure policy."""
+        try:
+            if not isinstance(mac, str) or not re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", mac):
+                raise ValueError("invalid MAC address")
+            host = builder(mac, item, *args)
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as error:
+            message = f"Malformed UniFi record {mac!r}: {type(error).__name__}"
+            if self.get_option("strict_records") is not False:
+                raise AnsibleError(message + "; set strict_records: false to skip it") from error
+            self.display.warning(message + "; skipping")
+            return
+        if host is not None:
+            hosts.append(host)
+
+    async def _fetch_from_controller(self) -> List[Dict[str, Any]]:
+        """Fetch inventory from a UniFi OS controller."""
+        from yarl import URL
+
+        hosts: List[Dict[str, Any]] = []
+        fetch_clients = not self.get_option("exclude_clients")
+        fetch_devices = self.get_option("include_devices") and not self.get_option("exclude_devices")
+        if not fetch_clients and not fetch_devices:
+            raise AnsibleError("Nothing to fetch from UniFi: enable clients or devices")
+
+        validate_certs = self.get_option("validate_certs")
+        timeout = aiohttp.ClientTimeout(total=self.get_option("api_timeout"))
+        connector = aiohttp.TCPConnector(ssl=aiohttp_connector_ssl(validate_certs))
+        # Controllers commonly use IP origins; aiohttp otherwise rejects their login cookies.
+        session = aiohttp.ClientSession(connector=connector, timeout=timeout, cookie_jar=aiohttp.CookieJar(unsafe=True))
+        try:
+            parsed = urlsplit(self.url)
+            host = parsed.hostname
+            # aiounifi builds its HTTPS URL from host/port, including IPv6 brackets.
+            if ":" in host:
+                host = f"[{host}]"
+            config = Configuration(
+                session=session,
+                host=host,
+                port=parsed.port or 443,
+                username=self.username,
+                password=self.password,
+                site=self.get_option("site"),
+                ssl_context=aiounifi_configuration_ssl_context(validate_certs),
+                totp_secret=self.totp_secret or None,
+            )
+            controller = Controller(config)
+            if self.token:
+                # Detection selects /proxy/network and clears cookies, so set TOKEN afterwards.
+                await self._read_with_retry(controller.connectivity.check_unifi_os)
+                session.cookie_jar.update_cookies({"TOKEN": self.token}, URL(self.url))
+            else:
+                # Repeating login can lock out the account; retries are restricted to reads.
+                await controller.login()
+            # aiounifi97 recursively reauthenticates on persistent read401s, resetting
+            # its retry flag each login. Disable that path to prevent account lockouts.
+            controller.connectivity.can_retry_login = False
+            if not controller.connectivity.is_unifi_os:
+                raise AnsibleError("This plugin requires a UniFi OS controller")
+
+            if fetch_clients:
+                await self._fetch_handler_records(controller, controller.clients)
+            if fetch_devices:
+                await self._fetch_handler_records(controller, controller.devices)
 
             vlan_names: Dict[int, str] = {}
             if fetch_clients:
                 try:
-                    network_request = ApiRequest(method="get", path="/rest/networkconf")
-                    networks_response = await controller.request(network_request)
-                    if networks_response and "data" in networks_response:
-                        for network in networks_response["data"]:
-                            vlan_id = network.get("vlan")
-                            name = network.get("name")
-                            if vlan_id and name:
-                                vlan_names[int(vlan_id)] = name
-                except Exception as e:
-                    logger.warning("Failed to fetch network configuration for VLAN names: %s", e)
+                    networks_response = await self._read_with_retry(
+                        lambda: controller.request(ApiRequest(method="get", path="/rest/networkconf"))
+                    )
+                    for network in networks_response.get("data", []):
+                        vlan_id, name = network.get("vlan"), network.get("name")
+                        if vlan_id and name:
+                            vlan_names[int(vlan_id)] = name
+                except (TimeoutError, AiounifiException, AttributeError, TypeError, ValueError) as error:
+                    # Network names are optional enrichment; discovery can succeed without them.
+                    self.display.warning(
+                        f"Unable to fetch VLAN names ({type(error).__name__}); VLAN IDs are still available"
+                    )
 
             current_time = time.time()
             last_seen_threshold = self.get_option("last_seen_minutes") * 60
-
             if fetch_clients:
                 for mac, client in _iter_handler_items(controller.clients):
-                    host = self._build_client_host(mac, client, vlan_names, current_time, last_seen_threshold)
-                    if host is not None:
-                        hosts.append(host)
-
+                    self._append_record(
+                        hosts, mac, client, self._build_client_host, vlan_names, current_time, last_seen_threshold
+                    )
             if fetch_devices:
                 for mac, device in _iter_handler_items(controller.devices):
-                    host = self._build_device_host(mac, device)
-                    if host is not None:
-                        hosts.append(host)
-
-        except AiounifiException as e:
-            raise AnsibleError(f"UniFi API error: {e}")
-        except Exception as e:
-            raise AnsibleError(f"Unexpected error: {e}")
+                    self._append_record(hosts, mac, device, self._build_device_host)
+        except AnsibleError:
+            raise
+        except LoginRequired as error:
+            message = (
+                "Session token expired or invalid; token requires the TOKEN login cookie, not a Network API key"
+                if self.token
+                else "Authentication failed: check username, password, and totp_secret"
+            )
+            raise AnsibleError(message) from error
+        except Forbidden as error:
+            raise AnsibleError("UniFi account is not authorized to read this site's inventory") from error
+        except TwoFaTokenRequired as error:
+            raise AnsibleError(
+                "2FA is required; configure totp_secret with the authenticator's shared secret"
+            ) from error
+        except TimeoutError as error:
+            raise AnsibleError("UniFi API request timed out; check reachability or increase api_timeout") from error
+        except AiounifiException as error:
+            message = _login_rate_limit_message(error)
+            # Raw upstream response bodies can contain private controller data.
+            raise AnsibleError(message or f"UniFi API request failed ({type(error).__name__})") from error
         finally:
             await session.close()
-
         return hosts

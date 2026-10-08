@@ -8,7 +8,7 @@ namespace: aioue
 name: network
 
 # The version of the collection. Must be compatible with semantic versioning
-version: 1.2.2
+version: 1.3.0
 
 # The path to the Markdown (.md) readme file. This path is relative to the root of the collection
 readme: README.md
@@ -63,12 +63,22 @@ issues: https://github.com/aioue/ansible-unifi-inventory/issues
 # and '.git' are always filtered. Mutually exclusive with 'manifest'
 build_ignore:
   - ansible.cfg.example
+  - inventory.yaml
+  - .env
   - '*.tar.gz'
   - dist
   - .pytest_cache
   - .venv
   - tests/_ansible_collections
   - .sanity-tree-path
+  - .sanity-tree
+  - .sanity-collections
+  - ansible_collections
+  - .github
+  - .gitignore
+  - .pre-commit-config.yaml
+  - requirements-dev.txt
+  - ruff.toml
   - .ruff_cache
 
 # A dict controlling use of manifest directives used in building the collection artifact. The key 'directives' is a

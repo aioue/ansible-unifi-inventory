@@ -1,49 +1,46 @@
-# UniFi Dynamic Inventory Configuration
-# This file uses the UniFi inventory plugin to dynamically discover hosts.
-# Name inventory files *.unifi.yml or *.unifi.yaml so Ansible auto-detects the plugin.
-
-# Plugin directive tells Ansible to use the UniFi inventory plugin
+# UniFi dynamic inventory. Name files *.unifi.yml or *.unifi.yaml for discovery.
 plugin: aioue.network.unifi
 
-# UniFi controller URL (required)
-# The base URL of your UniFi OS controller (e.g., UDM, UCG)
-url: "https://192.168.1.1"
+# Base URL of the controller (e.g. UDM, UCG).
+url: https://unifi.example.net
 
-# Authentication: provide either token OR username+password
-# Token authentication is preferred for security
+# Supply UNIFI_USERNAME and UNIFI_PASSWORD through the environment or Vault.
+# A local account avoids ui.com SSO dependencies; TOTP accounts also require
+# UNIFI_TOTP_SECRET (the Base32 authenticator setup seed).
+# UNIFI_TOKEN accepts an existing, expiring UniFi OS TOKEN session cookie.
+# Network API integration keys are unsupported.
 
-# Username/password authentication (local admin without 2FA)
-# Generate via UniFi OS Settings > Admins & Users > Create New User -> Admin + Restrict to Local Access Only
-username: "admin"
-password: "your-password-here"
+# Most single-controller setups use the default site.
+site: default
 
-# Local API token
-# After logging in as a _local_ admin user, go to Settings > Network > Control Plane > Integrations > Network API and create a new token
-# NOTE: Leave empty to use username/password instead
-token: ""
+# Trust the controller CA; disabling verification accepts unverified TLS.
+validate_certs: true
 
-# UniFi site name (default: "default")
-# Most single-controller setups use the default site
-site: "default"
-
-# SSL certificate verification (default: true)
-# Set to false for self-signed certificates
-# Security note: disabling verification reduces security
-verify_ssl: true
-
-# Include UniFi devices in inventory (default: false)
-# When true, adds access points, switches, and gateways to inventory
+# Adds access points, switches, and gateways when enabled.
 include_devices: false
 
-# Client last_seen filter in minutes (default: 30)
-# Only include clients seen within this many minutes
-# Useful to exclude stale/disconnected devices
+# Excludes stale/disconnected clients beyond this threshold (minutes).
 last_seen_minutes: 30
 
-# Optional: use MAC-based hostnames when device names are missing or unstable
+# MAC-based hostnames stay stable when friendly device names change.
 # hostname: mac
 
-# Create Ansible groups from host variables (Constructable inventory)
+# Duplicate names get MAC suffixes with warnings; fail stops loading instead.
+# hostname_collision: fail
+
+# Malformed records fail by default; false skips them with warnings.
+# strict_records: true
+
+# False excludes clients that only have last-known or reserved addresses.
+# allow_historical_addresses: false
+
+# Standard Ansible inventory caching reduces repeated controller logins.
+# cache: true
+# cache_plugin: ansible.builtin.jsonfile
+# cache_connection: .cache/unifi_inventory
+# cache_timeout: 30
+
+# Create groups from reported host variables (Constructable inventory).
 # keyed_groups:
 #   - key: ssid
 #     prefix: ssid

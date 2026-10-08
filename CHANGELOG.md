@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.3.0 (2026-10-08)
+
+**Inventory:**
+
+- Disambiguate duplicate hostnames with MAC suffixes and warnings. Set `hostname_collision: fail` to reject collisions instead.
+- Check collisions across clients, devices, sanitised names, and other inventory sources before adding hosts.
+- Invalidate cached records when controller, site, selection, or address settings change.
+- Validate controller settings, response envelopes, identities, addresses, and timestamps. Malformed records fail by default; `strict_records: false` skips them with warnings.
+- Retry transient reads up to three times without repeating failed logins. Report authentication, permission, timeout, and rate-limit failures separately.
+- Restore AP and switch metadata with aiounifi 97 and handle missing optional device fields.
+- Support UniFi OS `TOKEN` session cookies with IP-based controllers and the correct Network endpoint.
+
+**Maintenance:**
+
+- Require Python 3.14+, Ansible Core 2.21.5+, aiounifi 97+, and aiohttp 3.14.4+.
+- Test minimum and latest dependencies, real Ansible inventory loading against an HTTPS fixture, and the installed collection archive.
+- Keep sanity test trees outside the checkout without deleting caller-owned files. Exclude development files from release archives.
+- Validate release notes before publication and publish the tested archive with a SHA-256 checksum.
+- Update pinned Actions, Dependabot, and Python/Actions CodeQL checks. Restrict automatic merging to individual Dependabot patch updates.
+- Shorten the README, correct authentication examples, and add private vulnerability reporting instructions.
+
+**Upgrade notes:**
+
+- Friendly names are sanitised; colliding names receive suffixes. Review inventory names before running playbooks. `hostname: mac` avoids changes when friendly names change.
+- `token` accepts an expiring UniFi OS login cookie, not a Network Integrations API key. Password login, with optional TOTP, remains the unattended authentication method.
+- Historical client addresses remain enabled by default. Set `allow_historical_addresses: false` to require a current address. The `address_source` host variable identifies `ip`, `last_ip`, `fixed_ip`, or `ipv6`.
+- Existing cache entries refresh once to adopt the new cache format.
+- The physical switch-port variable is now `switch_port`; the former `port` variable used an Ansible-reserved name. Update expressions referring to it.
+
 ## 1.2.2 (2026-08-25)
 
 **Fixes:**

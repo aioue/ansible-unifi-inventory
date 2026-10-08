@@ -18,6 +18,16 @@ def _add_collections_path(path: Path) -> None:
 
 
 def _ensure_collection_path() -> None:
+    # Artifact tests must import the installed build rather than the checkout.
+    installed_path = os.environ.get("UNIFI_TEST_COLLECTIONS_PATH")
+    if installed_path:
+        installed_root = Path(installed_path).resolve()
+        if not (installed_root / "ansible_collections" / "aioue" / "network").is_dir():
+            raise RuntimeError(f"Collection is not installed under {installed_root}")
+        _add_collections_path(installed_root)
+        os.environ["ANSIBLE_COLLECTIONS_PATH"] = str(installed_root)
+        return
+
     TARGET.parent.mkdir(parents=True, exist_ok=True)
     if TARGET.is_symlink():
         try:
@@ -40,3 +50,8 @@ def _ensure_collection_path() -> None:
 
 
 _ensure_collection_path()
+
+# Ansible must install its namespace loader before tests import a collection directly.
+from ansible.plugins.loader import init_plugin_loader
+
+init_plugin_loader()
