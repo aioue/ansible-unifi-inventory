@@ -11,4 +11,5 @@ case "$MODE" in
   latest) python -m pip install -r requirements-dev.txt ;;
   *) echo "Unknown dependency mode: $MODE" >&2; exit 1 ;;
 esac
-ansible-galaxy collection install community.library_inventory_filtering_v1 -p tests/_ansible_collections
+ANSIBLE_COLLECTIONS_PATH="$PWD/tests/_ansible_collections" \
+  ansible-galaxy collection install community.library_inventory_filtering_v1 -p tests/_ansible_collections
