@@ -374,10 +374,9 @@ def test_controller_errors_do_not_echo_response_bodies(plugin):
     throttled = plugin._controller_error(ResponseError("Call https://controller received 429: b'secret-body'"))
     assert "rate limit" not in str(throttled).lower()
     assert "secret-body" not in str(throttled)
-    try:
+    with pytest.raises(json.JSONDecodeError) as caught:
         json.loads("{")
-    except json.JSONDecodeError as error:
-        decoded = plugin._controller_error(error)
+    decoded = plugin._controller_error(caught.value)
     assert "JSONDecodeError" in str(decoded)
     sso = plugin._controller_error(RequestError("SSO MFA required but no totp_secret configured"))
     assert "totp_secret" in str(sso)

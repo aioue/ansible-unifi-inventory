@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-import ansible._internal  # noqa: F401  # controller profiles such as inventory_legacy
+import ansible._internal
 import pyotp
 import pytest
 import yaml
@@ -25,6 +25,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+
+ansible._internal.setup()  # marks this process as a controller so inventory_legacy decodes
 
 ROOT = Path(__file__).resolve().parents[2]
 
