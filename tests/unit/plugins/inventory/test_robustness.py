@@ -32,7 +32,9 @@ def plugin():
 
 
 def client(**changes):
-    return SimpleNamespace(**({"name": "NAS", "last_seen": 1000, "ip": "192.168.1.2", "raw": {}} | changes))
+    return SimpleNamespace(
+        **({"name": "NAS", "last_seen": 1000, "ip": "192.168.1.2", "is_wired": False, "raw": {}} | changes)
+    )
 
 
 def append_client(plugin, record):
@@ -57,7 +59,14 @@ def append_client(plugin, record):
             "https://",
         )
     ]
-    + [{"api_timeout": 0}, {"api_timeout": -1}, {"last_seen_minutes": -1}, {"site": "../default"}, {"site": ""}],
+    + [
+        {"api_timeout": 0},
+        {"api_timeout": -1},
+        {"last_seen_minutes": -1},
+        {"last_seen_minutes": 0},
+        {"site": "../default"},
+        {"site": ""},
+    ],
 )
 def test_invalid_settings_fail_before_controller_access(tmp_path, settings):
     path = tmp_path / "test.unifi.yml"
@@ -145,7 +154,14 @@ def request_error(cause):
 
 
 @pytest.mark.parametrize(
-    "failure", [BadGateway(), ServiceUnavailable(), TimeoutError(), request_error(aiohttp.ClientConnectionError())]
+    "failure",
+    [
+        BadGateway(),
+        ServiceUnavailable(),
+        TimeoutError(),
+        request_error(aiohttp.ClientConnectionError()),
+        request_error(aiohttp.ClientPayloadError()),
+    ],
 )
 def test_transient_reads_recover_and_have_bounded_retries(plugin, failure):
     operation = AsyncMock(side_effect=[failure, "response"])
@@ -182,3 +198,244 @@ def test_authentication_and_certificate_failures_are_not_retried(plugin, failure
 def test_unsupported_handler_is_an_error():
     with pytest.raises(AnsibleError, match="no supported item iterator"):
         _iter_handler_items(object())
+
+
+def test_current_ipv6_beats_historical_ipv4_and_drops_unusable_addresses(plugin):
+    record = client(ip=None, raw={"last_ip": "192.0.2.50", "ipv6_addresses": ["fe80::1", "2001:db8::10"]})
+    hostvars = append_client(plugin, record)[0]["hostvars"]
+    assert hostvars["ansible_host"] == "2001:db8::10"
+    assert hostvars["address_source"] == "ipv6"
+    assert hostvars["ipv6_addresses"] == ["2001:db8::10"]
+
+
+def test_ipv6_in_the_ip_field_beats_historical_ipv4(plugin):
+    record = client(ip="2001:db8::10", raw={"last_ip": "192.0.2.8"})
+    hostvars = append_client(plugin, record)[0]["hostvars"]
+    assert hostvars["ansible_host"] == "2001:db8::10"
+    assert hostvars["address_source"] == "ipv6"
+
+
+def test_scoped_ipv6_is_published_without_the_zone(plugin):
+    record = client(ip=None, raw={"ipv6_addresses": ["fd00::ABCD%en0"]})
+    hostvars = append_client(plugin, record)[0]["hostvars"]
+    assert hostvars["ansible_host"] == "fd00::abcd"
+    assert hostvars["ipv6_addresses"] == ["fd00::abcd"]
+
+
+def test_wrong_family_historical_address_uses_the_next_source(plugin):
+    record = client(ip=None, raw={"last_ip": "2001:db8::50", "fixed_ip": "192.0.2.10"})
+    hostvars = append_client(plugin, record)[0]["hostvars"]
+    assert hostvars["ansible_host"] == "192.0.2.10"
+    assert hostvars["address_source"] == "fixed_ip"
+
+
+def test_loopback_fixed_ip_is_not_published(plugin):
+    record = client(raw={"ip": "192.168.1.2", "fixed_ip": "127.0.0.1"})
+    assert "fixed_ip" not in append_client(plugin, record)[0]["hostvars"]
+
+
+def test_sparse_aiounifi_client_omits_sentinel_defaults(plugin):
+    from aiounifi.models.client import Client
+
+    record = Client({"mac": MAC, "ip": "192.168.1.9", "last_seen": 1000, "name": "📺", "is_wired": True})
+    host = append_client(plugin, record)[0]
+    assert host["hostname"] == "aa-bb-cc-dd-ee-ff"
+    for key in ("first_seen", "association_time", "latest_association_time", "wired_rate_mbps"):
+        assert key not in host["hostvars"]
+
+
+def test_missing_name_without_oui_uses_underscore_mac(plugin):
+    host = append_client(plugin, client(name=None))[0]
+    assert host["hostname"] == "aa_bb_cc_dd_ee_ff"
+    assert "unifi_name" not in host["hostvars"]
+
+
+def test_missing_is_wired_follows_strict_records(plugin):
+    from aiounifi.models.client import Client
+
+    record = Client({"mac": MAC, "ip": "192.168.1.9", "last_seen": 1000, "name": "phone"})
+    with pytest.raises(AnsibleError, match="Malformed UniFi record"):
+        append_client(plugin, record)
+    plugin.options["strict_records"] = False
+    plugin.display.warning.reset_mock()
+    assert append_client(plugin, record) == []
+
+
+def test_missing_last_seen_follows_strict_records(plugin):
+    from aiounifi.models.client import Client
+
+    record = Client({"mac": MAC, "ip": "192.168.1.9", "name": "phone", "is_wired": True})
+    with pytest.raises(AnsibleError, match="Malformed UniFi record"):
+        append_client(plugin, record)
+    plugin.options["strict_records"] = False
+    plugin.display.warning.reset_mock()
+    assert append_client(plugin, record) == []
+
+
+def test_sparse_aiounifi_device_reports_adoption_and_omits_missing_fields(plugin):
+    from aiounifi.models.device import Device
+
+    device = Device({"mac": MAC, "ip": "192.168.1.2", "name": "AP", "type": "uap", "adopted": True})
+    host = plugin._build_device_host(MAC, device)
+    assert host is not None
+    assert host["hostvars"]["adopted"] is True
+    for key in ("model", "firmware_version", "uptime", "upgradable", "has_fan", "cpu_percent"):
+        assert key not in host["hostvars"]
+
+
+def test_unnamed_device_without_model_uses_device_prefix(plugin):
+    from aiounifi.models.device import Device
+
+    device = Device({"mac": MAC, "ip": "192.168.1.2", "type": "uap"})
+    host = plugin._build_device_host(MAC, device)
+    assert host is not None
+    assert host["hostname"] == "device_ddeeff"
+
+
+def test_non_dict_system_stats_fails_strict_records(plugin):
+    from aiounifi.models.device import Device
+
+    device = Device(
+        {
+            "mac": MAC,
+            "ip": "192.168.1.2",
+            "name": "AP",
+            "type": "uap",
+            "model": "U6",
+            "version": "1",
+            "system-stats": "bad",
+        }
+    )
+    with pytest.raises(AnsibleError, match="Malformed UniFi record"):
+        plugin._append_record([], MAC, device, plugin._build_device_host)
+
+
+def test_non_integer_station_count_fails_strict_records(plugin):
+    from aiounifi.models.device import Device
+
+    device = Device(
+        {
+            "mac": MAC,
+            "ip": "192.168.1.2",
+            "name": "AP",
+            "type": "uap",
+            "model": "U6",
+            "version": "1",
+            "user-num_sta": "8",
+        }
+    )
+    with pytest.raises(AnsibleError, match="Malformed UniFi record"):
+        plugin._append_record([], MAC, device, plugin._build_device_host)
+
+
+def test_one_bad_network_row_keeps_the_other_vlan_names(plugin):
+    names = plugin._vlan_names_from_response(
+        {
+            "data": [
+                {"vlan": 10, "name": "Servers"},
+                {"vlan": "nope", "name": "Bad"},
+                "not-a-dict",
+                {"vlan": 20, "name": "IoT"},
+            ]
+        }
+    )
+    assert names == {10: "Servers", 20: "IoT"}
+    assert plugin.display.warning.call_count == 2
+    plugin.display.warning.reset_mock()
+    assert plugin._vlan_names_from_response({}) == {}
+    assert "invalid response" in plugin.display.warning.call_args.args[0]
+
+
+def test_collapsed_group_names_warn_once(plugin):
+    plugin.inventory = InventoryData()
+
+    def build(essid, mac):
+        record = client(name=essid, is_wired=False, essid=essid)
+        hosts = []
+        plugin._append_record(hosts, mac, record, plugin._build_client_host, {}, 1000, 1800)
+        return hosts[0]
+
+    plugin.display.warning.reset_mock()
+    plugin._warn_collapsed_groups([build("Home WiFi", "aa:bb:cc:dd:ee:01"), build("home_wifi", "aa:bb:cc:dd:ee:02")])
+    assert plugin.display.warning.call_count == 1
+    assert "ssid_home_wifi" in plugin.display.warning.call_args.args[0]
+
+
+def test_controller_errors_do_not_echo_response_bodies(plugin):
+    from aiounifi.errors import NoPermission, ResponseError
+
+    plugin.token = ""
+    wrapped = RequestError("wrapped")
+    wrapped.__context__ = TimeoutError("stall")
+    timeout = plugin._controller_error(wrapped)
+    assert "api_timeout" in str(timeout)
+    assert "stall" not in str(timeout)
+    assert "authorized" in str(plugin._controller_error(NoPermission("secret-body")))
+    throttled = plugin._controller_error(ResponseError("Call https://controller received 429: b'secret-body'"))
+    assert "rate limit" not in str(throttled).lower()
+    assert "secret-body" not in str(throttled)
+    with pytest.raises(json.JSONDecodeError) as caught:
+        json.loads("{")
+    decoded = plugin._controller_error(caught.value)
+    assert "JSONDecodeError" in str(decoded)
+    sso = plugin._controller_error(RequestError("SSO MFA required but no totp_secret configured"))
+    assert "totp_secret" in str(sso)
+    assert "SSO MFA" not in str(sso)
+
+
+def test_run_async_propagates_keyboard_interrupt(plugin):
+    async def boom():
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        plugin._run_async(boom())
+
+
+def test_session_does_not_follow_login_redirect():
+    from aiohttp import web
+
+    from ansible_collections.aioue.network.plugins.inventory.unifi import (
+        ControllerRedirect,
+        OriginLockedClientSession,
+    )
+
+    async def scenario():
+        followed = {"count": 0}
+
+        async def login(_request):
+            raise web.HTTPTemporaryRedirect(location="http://127.0.0.1:9/collect")
+
+        async def collect(_request):
+            followed["count"] += 1
+            return web.json_response({})
+
+        app = web.Application()
+        app.router.add_post("/login", login)
+        app.router.add_post("/collect", collect)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        try:
+            async with OriginLockedClientSession() as session:
+                # aiounifi calls session.request, not session.post. post() is the
+                # inner ClientSession method and would follow the redirect.
+                with pytest.raises(ControllerRedirect):
+                    async with session.request(
+                        "POST", f"http://127.0.0.1:{port}/login", json={"password": "secret"}
+                    ) as response:
+                        await response.read()
+                assert followed["count"] == 0
+                async with session.request(
+                    "POST",
+                    f"http://127.0.0.1:{port}/login",
+                    json={"password": "secret"},
+                    allow_redirects=False,
+                ) as response:
+                    assert response.status == 307
+                assert followed["count"] == 0
+        finally:
+            await runner.cleanup()
+
+    asyncio.run(scenario())

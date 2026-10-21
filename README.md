@@ -13,11 +13,11 @@ Install the collection and its Python dependencies in the same environment that 
 ```bash
 python3.14 -m venv .venv
 source .venv/bin/activate
-python -m pip install 'ansible-core>=2.21.5' 'aiounifi>=97' 'aiohttp>=3.14.4' PyYAML pyotp
+python -m pip install 'ansible-core>=2.21.5' 'aiounifi>=97' 'aiohttp>=3.14.5' PyYAML pyotp
 ansible-galaxy collection install aioue.network
 ```
 
-Python 3.14 or newer is required. The current baseline is Ansible Core 2.21.5, aiounifi 97, and aiohttp 3.14.4. See [requirements.txt](requirements.txt) and [meta/runtime.yml](meta/runtime.yml).
+Python 3.14 or newer is required. The current baseline is Ansible Core 2.21.5, aiounifi 97, and aiohttp 3.14.5. See [requirements.txt](requirements.txt) and [meta/runtime.yml](meta/runtime.yml).
 
 Create `prod.unifi.yml`:
 
@@ -80,7 +80,7 @@ Inventory YAML values take precedence over environment values. Keep credentials 
 | `include_devices` | `UNIFI_INCLUDE_DEVICES` | `false` |
 | `exclude_clients` | `UNIFI_EXCLUDE_CLIENTS` | `false`; skips client fetching |
 | `exclude_devices` | `UNIFI_EXCLUDE_DEVICES` | `false`; overrides `include_devices` |
-| `last_seen_minutes` | `UNIFI_LAST_SEEN_MINUTES` | `30`; client recency limit |
+| `last_seen_minutes` | `UNIFI_LAST_SEEN_MINUTES` | `30`; client recency limit, must be greater than zero |
 | `hostname` | `UNIFI_HOSTNAME` | `name` or `mac` |
 | `hostname_collision` | `UNIFI_HOSTNAME_COLLISION` | `disambiguate` or `fail` |
 | `strict_records` | - | `true`; fail on malformed controller records |
@@ -88,17 +88,17 @@ Inventory YAML values take precedence over environment values. Keep credentials 
 
 Run `ansible-doc -t inventory aioue.network.unifi` for the full option reference.
 
-Friendly names become inventory hostnames with surrounding whitespace trimmed and characters outside letters, digits, underscores, dots, and hyphens replaced by underscores. The original is retained in `unifi_name`. Missing names fall back to manufacturer and MAC information. `hostname: mac` uses addresses such as `aa-bb-cc-dd-ee-ff` and keeps hostnames stable when friendly names change.
+Friendly names become inventory hostnames. Surrounding whitespace is trimmed, and characters outside letters, digits, underscores, dots, and hyphens become underscores. `unifi_name` keeps the controller's original name and is omitted when that name was not sent. A name that sanitizes to nothing becomes the hyphenated MAC, such as `aa-bb-cc-dd-ee-ff`. A missing name uses the manufacturer and the last four MAC bytes when the controller sent an OUI, and otherwise the MAC with colons turned into underscores. `hostname: mac` uses the hyphenated MAC and stays stable when friendly names change.
 
-Duplicate hostnames are renamed with a MAC suffix, with an Ansible warning for each renamed host. This also applies to names that collide after sanitisation, such as `Living Room` and `Living_Room`. Unique names stay unchanged. Set `hostname_collision: fail` to stop inventory loading instead. Collisions with existing inventory names are checked when combining sources.
+Duplicate hostnames are renamed with a MAC suffix. `localhost`, `127.0.0.1`, and `::1` are renamed the same way, because Ansible would otherwise treat that client as the implicit localhost. One warning names each shared hostname and how many hosts were renamed. This also applies to names that collide after sanitisation, such as `Living Room` and `Living_Room`. Unique names stay unchanged. Set `hostname_collision: fail` to stop inventory loading instead. Collisions with existing inventory names are checked when combining sources.
 
 Malformed client/device records fail inventory loading by default. Set `strict_records: false` to skip them with warnings. This option is independent of Ansible's `strict` setting for composed expressions.
 
-IPv4 is preferred, with usable IPv6 as fallback. Unscoped link-local IPv6 cannot be used as a connection address. By default, clients without a current address can use `last_ip` or `fixed_ip`; set `allow_historical_addresses: false` to restrict inventory to current addresses.
+IPv4 is preferred, then a current usable IPv6 address, including an IPv6 address in the `ip` field. A zone id is removed. Unscoped link-local IPv6 cannot be used as a connection address and is omitted from `ipv6_addresses`. Historical `last_ip` and `fixed_ip` are used only when the controller reported neither a usable IPv4 nor a usable IPv6 address. Set `allow_historical_addresses: false` to require a current address.
 
 ## Groups and host variables
 
-Clients join `unifi_clients` and either `unifi_wired_clients` or `unifi_wireless_clients`. Available network metadata adds `ssid_<name>`, `network_<name>`, `vlan_<id>`, and `vlan_<name>` groups. Group names use lowercase letters, digits, and underscores.
+Clients join `unifi_clients` and either `unifi_wired_clients` or `unifi_wireless_clients`. Available network metadata adds `ssid_<name>`, `network_<name>`, `vlan_<id>`, and `vlan_<name>` groups. Group names use lowercase letters, digits, and underscores. Distinct names that sanitize to one group, such as `Home WiFi` and `home_wifi`, share that group and produce one warning.
 
 With `include_devices: true`, infrastructure joins `unifi_devices` and its type group, such as `unifi_uap` or `unifi_usw`. State and capabilities can add `device_state_connected`, `unifi_upgradable`, `unifi_overheating`, or `unifi_poe_powered`.
 

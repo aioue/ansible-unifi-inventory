@@ -1,4 +1,6 @@
-# aiounifi uses integer releases; updates stay visible and require manual review.
+# aiounifi uses integer releases. Those are not semver-minor or semver-patch,
+# so auto-merge leaves them for review. Minor and patch updates, including
+# grouped CodeQL action bumps, merge after CI.
 version: 2
 updates:
   - package-ecosystem: github-actions

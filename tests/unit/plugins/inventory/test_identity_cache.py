@@ -39,7 +39,8 @@ def test_collisions_are_disambiguated_independently_of_fetch_order(plugin):
         plugin._populate_inventory(records)
     names = set(plugin.inventory.hosts)
     assert names == {"NAS__aabbccddee01", "NAS__aabbccddee02"}
-    assert warning.call_count == 2
+    assert warning.call_count == 1
+    assert "disambiguated 2 hosts" in warning.call_args.args[0]
     assert plugin.inventory.get_host("NAS__aabbccddee01").get_vars()["ansible_host"] == "192.0.2.1"
     assert plugin.inventory.get_host("NAS__aabbccddee02") in plugin.inventory.groups["unifi_devices"].hosts
     plugin.inventory = InventoryData()
@@ -87,6 +88,13 @@ def test_collision_fail_policy_does_not_partially_populate_inventory(plugin):
     with pytest.raises(AnsibleError, match="hostname collision"):
         plugin._populate_inventory([host("Unique", mac="aa:bb:cc:dd:ee:03"), host(), host(mac="aa:bb:cc:dd:ee:02")])
     assert not plugin.inventory.hosts
+
+
+@pytest.mark.parametrize("name", ["localhost", "127.0.0.1", "::1"])
+def test_implicit_localhost_names_are_disambiguated(plugin, name):
+    plugin._populate_inventory([host(name)])
+    assert set(plugin.inventory.hosts) == {f"{name}__aabbccddee01"}
+    assert plugin.inventory.localhost is None
 
 
 @pytest.mark.parametrize("name", ["all", "ungrouped", "unifi_clients"])
@@ -159,6 +167,17 @@ def test_conflicting_same_identity_records_fail_before_population(plugin):
     assert not plugin.inventory.hosts
 
 
+def test_same_mac_in_client_and_device_lists_keeps_the_device(plugin):
+    client = host(name="phone", address="192.0.2.5")
+    device = host(name="Office_AP", address="192.0.2.6", groups=["unifi_devices", "unifi_uap"])
+    plugin._populate_inventory([client, device])
+    assert set(plugin.inventory.hosts) == {"Office_AP"}
+    assert plugin.inventory.get_host("Office_AP").get_vars()["ansible_host"] == "192.0.2.6"
+    plugin.inventory = InventoryData()
+    plugin._populate_inventory([device, client])
+    assert set(plugin.inventory.hosts) == {"Office_AP"}
+
+
 @pytest.fixture
 def cached_source(tmp_path):
     config = {
@@ -216,6 +235,7 @@ def test_real_config_parse_cache_hit_refresh_and_secret_exclusion(plugin, cached
         {"last_seen_minutes": 60},
         {"allow_historical_addresses": False},
         {"strict_records": False},
+        {"validate_certs": False},
     ],
 )
 def test_cache_invalidates_when_effective_configuration_changes(plugin, cached_source, change):

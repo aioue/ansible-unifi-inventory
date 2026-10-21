@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.4.0 (2026-10-22)
+
+**Inventory:**
+
+- Keep the infrastructure device when the same MAC is both a client and a device. Wireless-uplinked access points appear in both lists.
+- Prefer a current address, including IPv6 in the `ip` field, over `last_ip` and `fixed_ip`. Drop zone ids and addresses that cannot be used off the controller.
+- Omit optional host variables the controller did not send, including `unifi_name` when no name was sent. aiounifi substitutes `0` and `false` for many missing keys.
+- Treat a missing `is_wired` or `last_seen` as a malformed client. A missing `is_wired` used to look wireless.
+- Disambiguate `localhost`, `127.0.0.1`, and `::1`. Fall back to the MAC when a friendly name sanitizes to nothing.
+- Refuse redirects on login and API calls. UniFi OS detection can still read the root redirect it already asked not to follow.
+- Map an SSO MFA login with no `totp_secret` to the 2FA error. Report wrapped timeouts, `NoPermission`, and login rate limits separately, without chaining response bodies into the error.
+- Warn once when different names sanitize to one group, and once per shared hostname.
+
+**Maintenance:**
+
+- Require aiohttp 3.14.5+ and `community.library_inventory_filtering_v1` 1.1.5+. Python 3.14+, Ansible Core 2.21.5+, and aiounifi 97+ stay the floor.
+- Pin CodeQL Action v4.39.1. Auto-merge Dependabot minor and patch updates, including grouped CodeQL action bumps, after required checks. Major bumps and integer aiounifi releases stay for review. A pip update whose notes say "breaking change" stays for review.
+- Keep a bare `pytest` on the same paths CI runs.
+
+**Upgrade notes:**
+
+- A client with a current IPv6 address and a historical IPv4 address now uses the IPv6 address. `allow_historical_addresses: false` still requires a current address.
+- A client record with no `is_wired` fails `strict_records` instead of joining `unifi_wireless_clients`. Set `strict_records: false` to skip it.
+- `last_seen_minutes: 0` is rejected. Use a positive number of minutes.
+- Hosts named `localhost`, `127.0.0.1`, or `::1` gain a MAC suffix. `unifi_name` is absent when the controller sent no name.
+- Cache entries refresh once because `validate_certs` is part of the cache fingerprint.
+- Optional host variables that were `0` or `false` only because the field was missing are now omitted.
+
 ## 1.3.0 (2026-10-08)
 
 **Inventory:**

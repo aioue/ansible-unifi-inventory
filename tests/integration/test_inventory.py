@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import ansible._internal
 import pyotp
 import pytest
 import yaml
@@ -24,6 +25,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+
+ansible._internal.setup()  # marks this process as a controller so inventory_legacy decodes
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -62,6 +65,7 @@ def controller(tmp_path):
         secret="JBSWY3DPEHPK3PXP",
         token="fixture-session",
         runner=None,
+        site=None,
     )
 
     async def handle(request):
@@ -155,24 +159,45 @@ def controller(tmp_path):
         state.runner = web.AppRunner(app)
         await state.runner.setup()
         site = web.TCPSite(state.runner, "127.0.0.1", 0, ssl_context=context)
+        state.site = site
         await site.start()
         state.url = f"https://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
         ready.set()
 
     def serve():
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(start())
-        loop.run_forever()
+        try:
+            loop.run_until_complete(start())
+            loop.run_forever()
+        finally:
+            # cleanup and close run on this thread. loop.close() does not abort
+            # the listening socket, and a timed-out cleanup must not skip that.
+            try:
+                if state.runner is not None and not loop.is_closed():
+                    loop.run_until_complete(asyncio.wait_for(state.runner.cleanup(), timeout=5))
+            except Exception:
+                server = getattr(state.site, "_server", None)
+                if server is not None:
+                    server.close()
+            finally:
+                if not loop.is_closed():
+                    loop.close()
 
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
-    assert ready.wait(10), "HTTPS fixture failed to start"
-    yield state
-    asyncio.run_coroutine_threadsafe(state.runner.cleanup(), loop).result(timeout=10)
-    loop.call_soon_threadsafe(loop.stop)
-    thread.join(timeout=10)
-    assert not thread.is_alive()
-    loop.close()
+    try:
+        assert ready.wait(10), "HTTPS fixture failed to start"
+        yield state
+    finally:
+        # Stop the loop even when the server thread is already closing it.
+        if thread.is_alive():
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass
+            thread.join(timeout=10)
+        if thread.is_alive():
+            raise RuntimeError("UniFi fixture server did not stop")
 
 
 @pytest.fixture
@@ -218,7 +243,7 @@ def test_password_inventory_collision_and_constructed_options(controller, invent
     result, hosts = inventory_cli(
         include_devices=True,
         compose={"derived": "ip"},
-        keyed_groups=[{"key": "vlan | string", "prefix": "vlan"}],
+        keyed_groups=[{"key": "vlan | string", "prefix": "kvlan"}],
         groups={"servers": "vlan == 10"},
     )
     assert result.returncode == 0, result.stderr
@@ -233,6 +258,7 @@ def test_password_inventory_collision_and_constructed_options(controller, invent
     groups = json.loads(result.stdout)
     assert set(groups["servers"]["hosts"]) == {"NAS__001122334455", "NAS__001122334466"}
     assert "NAS__001122334455" in groups["vlan_servers"]["hosts"]
+    assert set(groups["kvlan_10"]["hosts"]) == {"NAS__001122334455", "NAS__001122334466"}
     assert controller.logins == 1
     assert all(
         path == "/" or path == "/api/auth/login" or path.startswith("/proxy/network/")
