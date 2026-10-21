@@ -32,7 +32,9 @@ def plugin():
 
 
 def client(**changes):
-    return SimpleNamespace(**({"name": "NAS", "last_seen": 1000, "ip": "192.168.1.2", "raw": {}} | changes))
+    return SimpleNamespace(
+        **({"name": "NAS", "last_seen": 1000, "ip": "192.168.1.2", "is_wired": False, "raw": {}} | changes)
+    )
 
 
 def append_client(plugin, record):
@@ -206,6 +208,27 @@ def test_current_ipv6_beats_historical_ipv4_and_drops_unusable_addresses(plugin)
     assert hostvars["ipv6_addresses"] == ["2001:db8::10"]
 
 
+def test_ipv6_in_the_ip_field_beats_historical_ipv4(plugin):
+    record = client(ip="2001:db8::10", raw={"last_ip": "192.0.2.8"})
+    hostvars = append_client(plugin, record)[0]["hostvars"]
+    assert hostvars["ansible_host"] == "2001:db8::10"
+    assert hostvars["address_source"] == "ipv6"
+
+
+def test_scoped_ipv6_is_published_without_the_zone(plugin):
+    record = client(ip=None, raw={"ipv6_addresses": ["fd00::ABCD%en0"]})
+    hostvars = append_client(plugin, record)[0]["hostvars"]
+    assert hostvars["ansible_host"] == "fd00::abcd"
+    assert hostvars["ipv6_addresses"] == ["fd00::abcd"]
+
+
+def test_wrong_family_historical_address_uses_the_next_source(plugin):
+    record = client(ip=None, raw={"last_ip": "2001:db8::50", "fixed_ip": "192.0.2.10"})
+    hostvars = append_client(plugin, record)[0]["hostvars"]
+    assert hostvars["ansible_host"] == "192.0.2.10"
+    assert hostvars["address_source"] == "fixed_ip"
+
+
 def test_loopback_fixed_ip_is_not_published(plugin):
     record = client(raw={"ip": "192.168.1.2", "fixed_ip": "127.0.0.1"})
     assert "fixed_ip" not in append_client(plugin, record)[0]["hostvars"]
@@ -219,6 +242,23 @@ def test_sparse_aiounifi_client_omits_sentinel_defaults(plugin):
     assert host["hostname"] == "aa-bb-cc-dd-ee-ff"
     for key in ("first_seen", "association_time", "latest_association_time", "wired_rate_mbps"):
         assert key not in host["hostvars"]
+
+
+def test_missing_name_without_oui_uses_underscore_mac(plugin):
+    host = append_client(plugin, client(name=None))[0]
+    assert host["hostname"] == "aa_bb_cc_dd_ee_ff"
+    assert "unifi_name" not in host["hostvars"]
+
+
+def test_missing_is_wired_follows_strict_records(plugin):
+    from aiounifi.models.client import Client
+
+    record = Client({"mac": MAC, "ip": "192.168.1.9", "last_seen": 1000, "name": "phone"})
+    with pytest.raises(AnsibleError, match="Malformed UniFi record"):
+        append_client(plugin, record)
+    plugin.options["strict_records"] = False
+    plugin.display.warning.reset_mock()
+    assert append_client(plugin, record) == []
 
 
 def test_missing_last_seen_follows_strict_records(plugin):
@@ -239,8 +279,35 @@ def test_sparse_aiounifi_device_reports_adoption_and_omits_missing_fields(plugin
     host = plugin._build_device_host(MAC, device)
     assert host is not None
     assert host["hostvars"]["adopted"] is True
-    for key in ("model", "firmware_version", "uptime", "upgradable", "has_fan"):
+    for key in ("model", "firmware_version", "uptime", "upgradable", "has_fan", "cpu_percent"):
         assert key not in host["hostvars"]
+
+
+def test_unnamed_device_without_model_uses_device_prefix(plugin):
+    from aiounifi.models.device import Device
+
+    device = Device({"mac": MAC, "ip": "192.168.1.2", "type": "uap"})
+    host = plugin._build_device_host(MAC, device)
+    assert host is not None
+    assert host["hostname"] == "device_ddeeff"
+
+
+def test_non_dict_system_stats_fails_strict_records(plugin):
+    from aiounifi.models.device import Device
+
+    device = Device(
+        {
+            "mac": MAC,
+            "ip": "192.168.1.2",
+            "name": "AP",
+            "type": "uap",
+            "model": "U6",
+            "version": "1",
+            "system-stats": "bad",
+        }
+    )
+    with pytest.raises(AnsibleError, match="Malformed UniFi record"):
+        plugin._append_record([], MAC, device, plugin._build_device_host)
 
 
 def test_non_integer_station_count_fails_strict_records(plugin):
@@ -312,6 +379,9 @@ def test_controller_errors_do_not_echo_response_bodies(plugin):
     except json.JSONDecodeError as error:
         decoded = plugin._controller_error(error)
     assert "JSONDecodeError" in str(decoded)
+    sso = plugin._controller_error(RequestError("SSO MFA required but no totp_secret configured"))
+    assert "totp_secret" in str(sso)
+    assert "SSO MFA" not in str(sso)
 
 
 def test_run_async_propagates_keyboard_interrupt(plugin):
@@ -357,7 +427,15 @@ def test_session_does_not_follow_login_redirect():
                         "POST", f"http://127.0.0.1:{port}/login", json={"password": "secret"}
                     ) as response:
                         await response.read()
-            assert followed["count"] == 0
+                assert followed["count"] == 0
+                async with session.request(
+                    "POST",
+                    f"http://127.0.0.1:{port}/login",
+                    json={"password": "secret"},
+                    allow_redirects=False,
+                ) as response:
+                    assert response.status == 307
+                assert followed["count"] == 0
         finally:
             await runner.cleanup()
 

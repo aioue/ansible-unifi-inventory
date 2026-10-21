@@ -320,7 +320,7 @@ def test_template_option_returns_plain_value() -> None:
             "name",
             {"oui": "Apple Inc"},
             "Apple_Inc_ddeeff",
-            "Apple_Inc_ddeeff",
+            None,
         ),
     ],
 )

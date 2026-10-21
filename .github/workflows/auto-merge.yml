@@ -1,5 +1,10 @@
 # pull_request_target only reads metadata and queues a merge; it never runs PR code.
-# Integer aiounifi releases, grouped updates, and unknown version schemes need review.
+# Minor and patch updates merge after required checks, including grouped CodeQL
+# action bumps. Major bumps stay for review. aiounifi integer releases are not
+# semver-minor or semver-patch, so they stay for review too.
+# A "breaking change" note on a pip package stays for review. The same phrase on
+# an action pin does not: the pin is the whole diff, and a pin that breaks CI
+# never satisfies the required checks.
 name: Auto-merge
 
 on:
@@ -29,13 +34,16 @@ jobs:
         env:
           UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
           DEP_NAMES: ${{ steps.meta.outputs.dependency-names }}
-          DEPENDENCY_GROUP: ${{ steps.meta.outputs.dependency-group }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           eligible=false
-          # A patch classification is only useful for these known semver dependencies.
-          if [ "$UPDATE_TYPE" = "version-update:semver-patch" ] && [ -z "$DEPENDENCY_GROUP" ]; then
+          case "$UPDATE_TYPE" in
+            version-update:semver-minor|version-update:semver-patch) eligible=true ;;
+          esac
+          if [ "$eligible" = true ] && printf '%s\n' "$PR_BODY" | grep -qi 'breaking change'; then
             case "$DEP_NAMES" in
-              aiohttp|PyYAML|pyotp|pytest|ruff|ansible-core) eligible=true ;;
+              *codeql-action*|*actions/checkout*|*actions/setup-python*|*action-gh-release*|*fetch-metadata*) ;;
+              *) eligible=false ;;
             esac
           fi
           echo "eligible=$eligible" >> "$GITHUB_OUTPUT"

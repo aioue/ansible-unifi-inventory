@@ -8,7 +8,7 @@ namespace: aioue
 name: network
 
 # The version of the collection. Must be compatible with semantic versioning
-version: 1.3.0
+version: 1.4.0
 
 # The path to the Markdown (.md) readme file. This path is relative to the root of the collection
 readme: README.md
@@ -43,7 +43,7 @@ tags:
 # L(specifiers,https://python-semanticversion.readthedocs.io/en/latest/#requirement-specification). Multiple version
 # range specifiers can be separated by ','
 dependencies:
-  community.library_inventory_filtering_v1: ">=1.0.0"
+  community.library_inventory_filtering_v1: ">=1.1.5"
 
 # The URL of the originating SCM repository
 repository: https://github.com/aioue/ansible-unifi-inventory

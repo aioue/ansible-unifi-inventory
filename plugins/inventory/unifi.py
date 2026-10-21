@@ -24,7 +24,7 @@ DOCUMENTATION = r"""
     requirements:
         - Python >= 3.14
         - aiounifi >= 97 (Python library)
-        - aiohttp >= 3.14.4 (Python library)
+        - aiohttp >= 3.14.5 (Python library)
         - pyotp >= 2.10.0 (Python library; required for O(totp_secret))
     description:
         - Discovers UniFi clients and optionally devices from a UniFi OS controller
@@ -140,7 +140,8 @@ DOCUMENTATION = r"""
                 - How to derive the inventory hostname for clients and devices.
                 - V(mac) uses the MAC address with colons replaced by hyphens (e.g. aa-bb-cc-dd-ee-ff).
                 - V(name) uses the UniFi friendly name with sanitization; the original name is stored in C(unifi_name).
-                - A friendly name that sanitizes to an empty hostname falls back to the MAC address.
+                - A friendly name that sanitizes to an empty hostname falls back to the hyphenated MAC address.
+                - A missing name uses the manufacturer and MAC suffix when the controller sent an OUI, and otherwise the MAC address.
             type: str
             default: name
             choices: [mac, name]
@@ -216,6 +217,7 @@ validate_certs: true
 
 # Optional: use MAC-based hostnames for stability when device names change
 # hostname: mac
+# Group wireless clients from the source above by SSID.
 keyed_groups:
   - key: ssid
     prefix: ssid
@@ -274,14 +276,17 @@ try:
         context manager rather than on ClientSession._request.
         """
 
-        def __init__(self, inner):
+        def __init__(self, inner, refuse_redirects: bool):
             self._inner = inner
+            self._refuse_redirects = refuse_redirects
             self._entered = False
 
         async def __aenter__(self):
             response = await self._inner.__aenter__()
             self._entered = True
-            if 300 <= response.status < 400:
+            # check_unifi_os already asked not to follow and reads a 302 as
+            # "not UniFi OS". Login and API calls follow by default; refuse those.
+            if self._refuse_redirects and 300 <= response.status < 400:
                 status = response.status
                 await self._inner.__aexit__(None, None, None)
                 self._entered = False
@@ -309,8 +314,9 @@ try:
             return getattr(self._session, name)
 
         def request(self, method, url, **kwargs):
+            refuse_redirects = kwargs.get("allow_redirects", True) is not False
             kwargs["allow_redirects"] = False
-            return _RedirectRefusingRequest(self._session.request(method, url, **kwargs))
+            return _RedirectRefusingRequest(self._session.request(method, url, **kwargs), refuse_redirects)
 
         async def close(self):
             await self._session.close()
@@ -353,6 +359,11 @@ def sanitize_hostname(name: str) -> str:
     return name
 
 
+# InventoryData.add_host promotes these names to the implicit localhost. A DHCP
+# hostname of localhost would then make `hosts: localhost` connect to that client.
+_IMPLICIT_LOCALHOST = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
 def mac_to_hostname(mac: str) -> str:
     """Convert a MAC address to a stable inventory hostname."""
     return mac.replace(":", "-").lower()
@@ -374,9 +385,14 @@ def _usable_address(value: Any, version: int) -> str | None:
         return None
     if not isinstance(value, str):
         raise ValueError("IP address must be a string")
+    # A zone id names an interface on the controller, not a destination.
+    if "%" in value:
+        value = value.split("%", 1)[0]
     address = ipaddress.ip_address(value)
+    # UniFi can put the other family in last_ip or ip. That slot is unused;
+    # failing the record here drops a client that still has a usable address.
     if address.version != version:
-        raise ValueError(f"expected IPv{version} address")
+        return None
     if address.is_unspecified or address.is_multicast or address.is_loopback or address.is_link_local:
         return None
     return str(address)
@@ -534,8 +550,14 @@ def _reported_attribute(item: Any, name: str, raw_key: str | None = None) -> Any
         return None
     if isinstance(prop, property) or raw_dict is None or raw_key not in raw_dict:
         try:
-            return getattr(item, name, None)
+            # getattr(obj, name, default) turns a property's AttributeError into
+            # the default, which would hide a present but unusable value.
+            return getattr(item, name)
         except KeyError:
+            return None
+        except AttributeError:
+            if isinstance(prop, property):
+                raise
             return None
         except AssertionError as error:
             # A missing key is absence. A present value that fails the property's
@@ -739,29 +761,37 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             or getattr(client, "alias", None)
             or getattr(client, "friendly_name", None)
         )
+        if not isinstance(friendly, str) or not friendly.strip():
+            friendly = None
 
         if mode == "mac":
             return mac_to_hostname(mac), friendly
 
-        if not friendly:
+        if friendly is None:
             oui = getattr(client, "oui", None)
             if oui:
-                friendly = f"{oui.replace(' ', '_')}_{mac[-8:].replace(':', '')}"
+                fallback = f"{oui.replace(' ', '_')}_{mac[-8:].replace(':', '')}"
             else:
-                friendly = mac
+                fallback = mac
+            return _hostname_from_friendly_name(fallback, mac), None
 
         return _hostname_from_friendly_name(friendly, mac), friendly
 
     def _resolve_device_hostname(self, mac: str, device: Any, mode: str) -> Tuple[str, str | None]:
         """Return inventory hostname and optional original UniFi name."""
         name = getattr(device, "name", None)
+        if not isinstance(name, str) or not name.strip():
+            name = None
 
         if mode == "mac":
             return mac_to_hostname(mac), name
 
-        if not name:
-            model = getattr(device, "model", "device")
-            name = f"{model}_{mac[-8:].replace(':', '')}"
+        if name is None:
+            # Device.model raises KeyError when the controller omitted it, so the
+            # getattr default never runs. The prefix is only a hostname label.
+            model = _reported_attribute(device, "model") or "device"
+            fallback = f"{model}_{mac[-8:].replace(':', '')}"
+            return _hostname_from_friendly_name(fallback, mac), None
 
         return _hostname_from_friendly_name(name, mac), name
 
@@ -792,7 +822,9 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         hostname, unifi_name = self._resolve_client_hostname(mac, client, hostname_mode)
 
         # UniFi omits plain ip for some DHCP-reserved wired clients; last_ip/fixed_ip remain.
-        ipv4 = _usable_address(getattr(client, "ip", None) or raw.get("ip"), 4)
+        # The same field can hold a current IPv6 address. A family mismatch is not absence.
+        reported_ip = getattr(client, "ip", None) or raw.get("ip")
+        ipv4 = _usable_address(reported_ip, 4)
         address_source = "ip"
 
         ipv6_addresses = raw.get("ipv6_addresses") or []
@@ -803,8 +835,11 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             if not isinstance(addr, str):
                 raise ValueError("ipv6_addresses entries must be strings")
             address = _usable_address(addr, 6)
-            if address:
+            if address and address not in usable_ipv6:
                 usable_ipv6.append(address)
+        current_ipv6 = _usable_address(reported_ip, 6)
+        if current_ipv6 and current_ipv6 not in usable_ipv6:
+            usable_ipv6.insert(0, current_ipv6)
         ipv6 = usable_ipv6[0] if usable_ipv6 else None
 
         # A current IPv6 address is a current address. Historical IPv4 is only used
@@ -824,7 +859,11 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         if not ansible_host:
             return None
 
-        is_wired = getattr(client, "is_wired", False)
+        # Client.is_wired returns False when the key is absent. That sentinel
+        # would publish a wireless client and skip its switch fields.
+        is_wired = _reported_attribute(client, "is_wired")
+        if is_wired is None:
+            raise ValueError("is_wired is missing")
         if not isinstance(is_wired, bool):
             raise ValueError("is_wired must be a boolean")
         hostvars = {
@@ -876,6 +915,8 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             hostvars["network"] = network
         if network_id:
             hostvars["network_id"] = network_id
+        # VLAN 0 is untagged. It stays inside the legal range so strict_records
+        # does not fail the client, and it does not create a vlan_0 group.
         if vlan:
             hostvars["vlan"] = vlan
             vlan_name = vlan_names.get(vlan)
@@ -995,13 +1036,14 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         _set_optional_hostvar(hostvars, "led_override", _reported_attribute(device, "led_override"))
         _set_optional_hostvar(hostvars, "led_override_color", _reported_attribute(device, "led_override_color"))
 
-        try:
-            cpu, mem, uptime = device.system_stats
+        # A missing system-stats object is optional. A present value that is not
+        # an object raises from the property and fails strict_records.
+        stats = _reported_attribute(device, "system_stats", "system-stats")
+        if stats is not None:
+            cpu, mem, uptime = stats
             _set_optional_hostvar(hostvars, "cpu_percent", cpu)
             _set_optional_hostvar(hostvars, "mem_percent", mem)
             _set_optional_hostvar(hostvars, "system_uptime", uptime)
-        except AttributeError, KeyError, TypeError, ValueError:
-            pass
 
         poe_ports = _build_poe_ports(device)
         if poe_ports:
@@ -1133,6 +1175,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             collision = (
                 counts[hostname] > 1
                 or hostname in groups
+                or hostname in _IMPLICIT_LOCALHOST
                 or not self._existing_host_matches(hostname, host["hostvars"])
             )
             if collision:
@@ -1263,6 +1306,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 continue
             vlan_id = network.get("vlan")
             name = network.get("name")
+            # A missing id, or 0, is the untagged network rather than a named VLAN.
             if not vlan_id or not name:
                 continue
             try:
@@ -1288,7 +1332,9 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             return AnsibleError(message)
         if isinstance(error, (Forbidden, NoPermission)):
             return AnsibleError("UniFi account is not authorized to read this site's inventory")
-        if isinstance(error, TwoFaTokenRequired):
+        if isinstance(error, TwoFaTokenRequired) or (
+            isinstance(error, RequestError) and "no totp_secret configured" in str(error)
+        ):
             return AnsibleError("2FA is required; configure totp_secret with the authenticator's shared secret")
         if isinstance(error, TimeoutError) or _is_timeout(error):
             return AnsibleError("UniFi API request timed out; check reachability or increase api_timeout")

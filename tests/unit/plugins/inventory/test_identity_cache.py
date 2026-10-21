@@ -90,6 +90,13 @@ def test_collision_fail_policy_does_not_partially_populate_inventory(plugin):
     assert not plugin.inventory.hosts
 
 
+@pytest.mark.parametrize("name", ["localhost", "127.0.0.1", "::1"])
+def test_implicit_localhost_names_are_disambiguated(plugin, name):
+    plugin._populate_inventory([host(name)])
+    assert set(plugin.inventory.hosts) == {f"{name}__aabbccddee01"}
+    assert plugin.inventory.localhost is None
+
+
 @pytest.mark.parametrize("name", ["all", "ungrouped", "unifi_clients"])
 def test_group_names_cannot_be_used_as_hostnames(plugin, name):
     plugin._populate_inventory([host(name)])
