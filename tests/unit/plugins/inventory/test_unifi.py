@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 from ansible.errors import AnsibleError
 from ansible.inventory.data import InventoryData
 from ansible.parsing.dataloader import DataLoader
@@ -56,6 +57,16 @@ def test_sanitize_hostname(raw: str, expected: str) -> None:
     assert sanitize_hostname(raw) == expected
 
 
+def test_empty_friendly_name_falls_back_to_mac() -> None:
+    plugin = InventoryModule()
+    client = SimpleNamespace(name="📺")
+
+    hostname, unifi_name = plugin._resolve_client_hostname("AA:BB:CC:DD:EE:FF", client, "name")
+
+    assert hostname == "aa-bb-cc-dd-ee-ff"
+    assert unifi_name == "📺"
+
+
 def test_mac_to_hostname() -> None:
     assert mac_to_hostname("AA:BB:CC:DD:EE:FF") == "aa-bb-cc-dd-ee-ff"
 
@@ -86,7 +97,7 @@ def test_aiounifi_configuration_ssl_context() -> None:
 
 @patch("ansible_collections.aioue.network.plugins.inventory.unifi.HAS_AIOUNIFI", True)
 @patch("ansible_collections.aioue.network.plugins.inventory.unifi.Controller")
-@patch("ansible_collections.aioue.network.plugins.inventory.unifi.aiohttp.ClientSession")
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.OriginLockedClientSession")
 @patch("ansible_collections.aioue.network.plugins.inventory.unifi.aiohttp.TCPConnector")
 def test_fetch_passes_ssl_false_to_tcp_connector_with_ca_bundle_env(
     mock_tcp_connector: MagicMock,
@@ -168,7 +179,7 @@ def test_inventory_value_serializes_nested_structures() -> None:
 @pytest.mark.parametrize(
     ("error", "expected_substring"),
     [
-        (Exception("429 Too Many Requests"), "rate limit"),
+        (Exception("429 Too Many Requests"), None),
         (
             Exception('{"code":"AUTHENTICATION_FAILED_LIMIT_REACHED"}'),
             "rate limit",
@@ -521,6 +532,26 @@ def test_verify_file_accepts_plugin_directive(tmp_path: Path) -> None:
         assert plugin.verify_file(str(inventory_file)) is True
 
 
+def test_verify_file_rejects_suffix_lookalikes(tmp_path: Path) -> None:
+    plugin = InventoryModule()
+    inventory_file = tmp_path / "myunifi.yml"
+    inventory_file.write_text("all:\n  hosts:\n    localhost:\n", encoding="utf-8")
+
+    with patch(
+        "ansible.plugins.inventory.BaseInventoryPlugin.verify_file",
+        return_value=True,
+    ):
+        assert plugin.verify_file(str(inventory_file)) is False
+
+    named = tmp_path / "lab.unifi.yaml"
+    named.write_text("plugin: aioue.network.unifi\n", encoding="utf-8")
+    with patch(
+        "ansible.plugins.inventory.BaseInventoryPlugin.verify_file",
+        return_value=True,
+    ):
+        assert plugin.verify_file(str(named)) is True
+
+
 def test_verify_file_rejects_unrelated_yaml(tmp_path: Path) -> None:
     plugin = InventoryModule()
     inventory_file = tmp_path / "hosts.yml"
@@ -567,7 +598,13 @@ def test_populate_inventory_from_fixture() -> None:
     assert plugin.inventory.get_host("phone").get_vars()["ansible_host"] == "192.168.1.50"
     assert "unifi_clients" in plugin.inventory.groups
     assert "phone" in [h.name for h in plugin.inventory.groups["unifi_clients"].hosts]
-    assert fixture.exists()
+    loaded = yaml.safe_load(fixture.read_text(encoding="utf-8"))
+    assert loaded["plugin"] == "aioue.network.unifi"
+    with patch(
+        "ansible.plugins.inventory.BaseInventoryPlugin.verify_file",
+        return_value=True,
+    ):
+        assert plugin.verify_file(str(fixture)) is True
 
 
 @patch(
@@ -666,11 +703,12 @@ def test_iter_handler_items_prefers_items_callable() -> None:
     assert list(_iter_handler_items(handler)) == [("aa:bb:cc:dd:ee:01", handler.items()[0][1])]
 
 
-def test_iter_handler_items_falls_back_to_private_items() -> None:
+def test_iter_handler_items_ignores_private_items() -> None:
     client = SimpleNamespace(mac="aa:bb:cc:dd:ee:02")
     handler = SimpleNamespace(_items={"aa:bb:cc:dd:ee:02": client})
 
-    assert list(_iter_handler_items(handler)) == [("aa:bb:cc:dd:ee:02", client)]
+    with pytest.raises(AnsibleError, match="no supported item iterator"):
+        _iter_handler_items(handler)
 
 
 def test_build_client_host_skips_stale_clients() -> None:
@@ -695,18 +733,19 @@ def test_build_client_host_skips_stale_clients() -> None:
 
 
 @pytest.mark.parametrize(
-    ("raw", "client_ip"),
+    ("raw", "client_ip", "source"),
     [
-        ({"last_ip": "192.168.1.10"}, None),
-        ({"fixed_ip": "192.168.1.10"}, None),
-        ({"ip": "", "last_ip": "192.168.1.10"}, ""),
-        ({"ip": "", "last_ip": "", "fixed_ip": "192.168.1.10"}, ""),
+        ({"last_ip": "192.168.1.10"}, None, "last_ip"),
+        ({"fixed_ip": "192.168.1.10"}, None, "fixed_ip"),
+        ({"ip": "", "last_ip": "192.168.1.10"}, "", "last_ip"),
+        ({"ip": "", "last_ip": "", "fixed_ip": "192.168.1.10"}, "", "fixed_ip"),
     ],
     ids=["last_ip_only", "fixed_ip_only", "empty_ip_last_ip", "empty_ip_fixed_ip"],
 )
 def test_build_client_host_uses_last_ip_or_fixed_ip_when_ip_missing(
     raw: dict[str, str],
     client_ip: str | None,
+    source: str,
 ) -> None:
     plugin = InventoryModule()
     client = SimpleNamespace(
@@ -730,6 +769,7 @@ def test_build_client_host_uses_last_ip_or_fixed_ip_when_ip_missing(
     assert host["hostvars"]["ansible_host"] == "192.168.1.10"
     assert host["hostvars"]["ip"] == "192.168.1.10"
     assert host["hostvars"]["ipv4"] == "192.168.1.10"
+    assert host["hostvars"]["address_source"] == source
 
 
 def test_build_client_host_prefers_ip_over_last_ip_and_fixed_ip() -> None:
@@ -757,6 +797,7 @@ def test_build_client_host_prefers_ip_over_last_ip_and_fixed_ip() -> None:
 
     assert host is not None
     assert host["hostvars"]["ansible_host"] == "192.168.1.50"
+    assert host["hostvars"]["address_source"] == "ip"
 
 
 def test_build_client_host_last_ip_beats_fixed_ip() -> None:
@@ -827,6 +868,9 @@ def test_build_client_host_ipv6_only_when_no_ipv4_fields() -> None:
 
     assert host is not None
     assert host["hostvars"]["ansible_host"] == "2001:db8::1"
+    assert host["hostvars"]["ipv6"] == "2001:db8::1"
+    assert host["hostvars"]["ipv6_addresses"] == ["2001:db8::1"]
+    assert host["hostvars"]["address_source"] == "ipv6"
     assert "ip" not in host["hostvars"]
 
 
@@ -984,7 +1028,7 @@ def test_template_option_resolves_totp_secret() -> None:
 
 
 @patch("ansible_collections.aioue.network.plugins.inventory.unifi.HAS_AIOUNIFI", True)
-@patch("ansible_collections.aioue.network.plugins.inventory.unifi.aiohttp.ClientSession")
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.OriginLockedClientSession")
 @patch("ansible_collections.aioue.network.plugins.inventory.unifi.Controller")
 def test_fetch_from_controller_respects_exclude_clients(
     mock_controller_cls: MagicMock,
@@ -1052,7 +1096,7 @@ def test_fetch_from_controller_respects_exclude_clients(
 
 
 @patch("ansible_collections.aioue.network.plugins.inventory.unifi.HAS_AIOUNIFI", True)
-@patch("ansible_collections.aioue.network.plugins.inventory.unifi.aiohttp.ClientSession")
+@patch("ansible_collections.aioue.network.plugins.inventory.unifi.OriginLockedClientSession")
 @patch("ansible_collections.aioue.network.plugins.inventory.unifi.Controller")
 def test_fetch_from_controller_respects_exclude_devices(
     mock_controller_cls: MagicMock,

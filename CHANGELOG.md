@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+**Fixes:**
+
+- Keep the infrastructure device when the same MAC is both a client and a device, instead of aborting discovery. Wireless-uplinked access points show up in both lists.
+- Fall back to the MAC when a friendly name sanitizes to an empty hostname, instead of failing every host.
+- Refuse controller redirects. A 307/308 would otherwise resend the login body off the validated HTTPS origin.
+- Omit optional host variables when the controller did not send the field. aiounifi substitutes `0` and `false` for many missing keys.
+- Treat a non-integer `user-num_sta` as a malformed device record, and read `adopted` from the device payload.
+- Prefer a current IPv6 address over `last_ip` / `fixed_ip`, and publish only usable addresses in `ipv6_addresses`.
+- Fail or skip a client with no `last_seen`, instead of treating the missing timestamp as 1970 and dropping it quietly.
+- Keep parsing VLAN names after one bad network row, and warn when the network list is missing.
+- Report timeouts that aiounifi wraps as `RequestError`, map `NoPermission` to the authorization error, and stop treating every HTTP 429 as a login rate limit. Do not chain controller exceptions that embed response bodies.
+- Retry a truncated response body. Include `validate_certs` in the cache fingerprint.
+- Omit device model and firmware when the controller did not report them. `verify_file` no longer claims `myunifi.yml` or `not-unifi.yaml`.
+- Warn once when different SSID, network, or VLAN names sanitize to the same group, and once per shared hostname rather than once per host.
+- Reject `last_seen_minutes: 0`. Documented examples leave TLS verification on.
+- Run the controller fetch on the calling thread so Ctrl-C cancels it.
+
 ## 1.3.0 (2026-10-08)
 
 **Inventory:**

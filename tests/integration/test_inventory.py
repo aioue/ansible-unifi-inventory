@@ -166,13 +166,19 @@ def controller(tmp_path):
 
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
-    assert ready.wait(10), "HTTPS fixture failed to start"
-    yield state
-    asyncio.run_coroutine_threadsafe(state.runner.cleanup(), loop).result(timeout=10)
-    loop.call_soon_threadsafe(loop.stop)
-    thread.join(timeout=10)
-    assert not thread.is_alive()
-    loop.close()
+    try:
+        assert ready.wait(10), "HTTPS fixture failed to start"
+        yield state
+    finally:
+        # Stop the loop even when cleanup times out, or a failed test leaves
+        # the server thread and its port running for the rest of the process.
+        try:
+            if state.runner is not None:
+                asyncio.run_coroutine_threadsafe(state.runner.cleanup(), loop).result(timeout=10)
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join(timeout=10)
+            loop.close()
 
 
 @pytest.fixture
