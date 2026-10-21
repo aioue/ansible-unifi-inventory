@@ -80,6 +80,7 @@ build_ignore:
   - requirements-dev.txt
   - ruff.toml
   - .ruff_cache
+  - pytest.ini
 
 # A dict controlling use of manifest directives used in building the collection artifact. The key 'directives' is a
 # list of MANIFEST.in style
