@@ -333,12 +333,23 @@ def test_read_unauthorized_does_not_reauthenticate(controller, inventory_cli):
     assert sum(path.endswith("/stat/sta") for _method, path, _cookie in controller.requests) == 1
 
 
-@pytest.mark.parametrize("mode", ["missing_data", "html", "duplicate_mac"])
-def test_invalid_response_cannot_silently_empty_or_overwrite_inventory(controller, inventory_cli, mode):
+# The guarantee under test is that the run fails and writes no inventory. Which message
+# appears depends on the aiounifi version: aiounifi 99 raises ApplicationNotReady for a
+# non-JSON 200 body before the plugin validates it, while aiounifi 97 (the minimum floor)
+# returns the body and the plugin's own check fires. Both are accepted for "html".
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("missing_data", ("Invalid UniFi inventory response",)),
+        ("html", ("Invalid UniFi inventory response", "ApplicationNotReady")),
+        ("duplicate_mac", ("Conflicting UniFi records",)),
+    ],
+)
+def test_invalid_response_cannot_silently_empty_or_overwrite_inventory(controller, inventory_cli, mode, expected):
     controller.response_mode = mode
     result, _hosts = inventory_cli(strict_records=False)
     assert result.returncode != 0
-    assert "Invalid UniFi inventory response" in result.stderr or "Conflicting UniFi records" in result.stderr
+    assert any(message in result.stderr for message in expected)
 
 
 def test_missing_mac_obeys_record_policy(controller, inventory_cli):
