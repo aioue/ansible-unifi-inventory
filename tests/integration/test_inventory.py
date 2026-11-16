@@ -62,7 +62,7 @@ def controller(tmp_path):
         malformed=False,
         response_mode="",
         require_totp=False,
-        secret="JBSWY3DPEHPK3PXP",
+        secret="JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
         token="fixture-session",
         runner=None,
         site=None,
