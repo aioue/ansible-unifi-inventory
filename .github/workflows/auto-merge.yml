@@ -1,10 +1,6 @@
 # pull_request_target only reads metadata and queues a merge; it never runs PR code.
-# Minor and patch updates merge after required checks, including grouped CodeQL
-# action bumps. Major bumps stay for review. aiounifi integer releases are not
-# semver-minor or semver-patch, so they stay for review too.
-# A "breaking change" note on a pip package stays for review. The same phrase on
-# an action pin does not: the pin is the whole diff, and a pin that breaks CI
-# never satisfies the required checks.
+# Every Dependabot PR, including major bumps, is queued for auto-merge and lands
+# once the required "test" check passes. A bump that breaks CI never merges.
 name: Auto-merge
 
 on:
@@ -16,7 +12,6 @@ permissions: {}
 jobs:
   dependabot:
     if: >-
-      github.actor == 'dependabot[bot]' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       !github.event.pull_request.draft
     runs-on: ubuntu-latest
@@ -24,32 +19,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Fetch Dependabot metadata
-        id: meta
-        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
-        with:
-          github-token: "${{ secrets.GITHUB_TOKEN }}"
-      - name: Decide auto-merge eligibility
-        id: decide
-        env:
-          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
-          DEP_NAMES: ${{ steps.meta.outputs.dependency-names }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          eligible=false
-          case "$UPDATE_TYPE" in
-            version-update:semver-minor|version-update:semver-patch) eligible=true ;;
-          esac
-          if [ "$eligible" = true ] && printf '%s\n' "$PR_BODY" | grep -qi 'breaking change'; then
-            case "$DEP_NAMES" in
-              *codeql-action*|*actions/checkout*|*actions/setup-python*|*action-gh-release*|*fetch-metadata*) ;;
-              *) eligible=false ;;
-            esac
-          fi
-          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
-          printf 'Auto-merge eligible: %s\n' "$eligible" >> "$GITHUB_STEP_SUMMARY"
       - name: Enable auto-merge after required checks pass
-        if: steps.decide.outputs.eligible == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
